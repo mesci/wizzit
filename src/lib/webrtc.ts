@@ -551,15 +551,12 @@ export class WebRTCManager {
         chunksSent++
         offset += chunk.size
 
-        // CONSERVATIVE progress - let receiver control the real progress
-        // Only show local progress if receiver hasn't updated yet
-        const localProgress = (chunksSent / totalChunks) * 50  // Max 50% based on sending
-        const bufferProgress = Math.max(0, 30 * (1 - (dataChannel.bufferedAmount / this.maxBufferedAmount)))
-        const calculatedProgress = Math.min(localProgress + bufferProgress, 80) // Max 80% until receiver confirms
+        // Simple progress based on chunks sent (receiver will sync the real progress)
+        const localProgress = (chunksSent / totalChunks) * 100
         
         // Only update if our calculation is higher than current progress (receiver may have updated)
-        if (calculatedProgress > transfer.progress) {
-          transfer.progress = calculatedProgress
+        if (localProgress > transfer.progress) {
+          transfer.progress = Math.min(localProgress, 95) // Max 95% until receiver confirms completion
           
           const now = Date.now()
           if (now - lastProgressUpdate > 16) { // 60fps for smooth progress
