@@ -55,18 +55,18 @@ syslog
 
 ```bash
 # TURN Server Configuration
-TURN_SERVER=turn:YOUR_SERVER_IP:3478
+TURN_SERVER=YOUR_SERVER_IP:3478
 TURN_SECRET=YOUR_SECURE_SECRET_KEY_HERE
 
 # STUN Server (same server)
-STUN_SERVER=stun:YOUR_SERVER_IP:3478
+STUN_SERVER=YOUR_SERVER_IP:3478
 
 # Alternative TURN with TLS (port 5349)
-# TURN_SERVER=turns:turn.yourdomain.com:5349
+# TURN_SERVER=turn.yourdomain.com:5349
 
 # Alternative ports available:
 # Port 443 (for firewalls that block 3478)
-# TURN_SERVER=turn:YOUR_SERVER_IP:443
+# TURN_SERVER=YOUR_SERVER_IP:443
 ```
 
 ### 3. How Time-Limited Credentials Work
@@ -166,22 +166,22 @@ If you want to use a managed service instead:
 
 **Twilio**
 ```bash
-TURN_SERVER=turn:global.turn.twilio.com:3478?transport=udp
+TURN_SERVER=global.turn.twilio.com:3478?transport=udp
 TURN_SECRET=your-twilio-secret
 ```
 
 **Xirsys**
 ```bash
-TURN_SERVER=turn:ss-turn1.xirsys.com:80?transport=udp
+TURN_SERVER=ss-turn1.xirsys.com:80?transport=udp
 TURN_SECRET=your-xirsys-secret
 ```
 
 **Metered**
 ```bash
-TURN_SERVER=turn:a.relay.metered.ca:80
+TURN_SERVER=a.relay.metered.ca:80
 TURN_SECRET=your-metered-secret
 ```
 
 ---
 
-*Bu konfigürasyon RFC 5766 standartlarına uygun olarak hazırlanmıştır.* 
+*This configuration is prepared in accordance with RFC 5766 standards.* 
