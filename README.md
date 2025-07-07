@@ -8,7 +8,7 @@
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
   [![Vercel](https://img.shields.io/badge/Deploy-Vercel-black.svg)](https://vercel.com/new/clone?repository-url=https://github.com/mesci/wizzit)
   
-  [Live Demo](https://wizzit.org) • [Documentation](#readme) • [Report Bug](../../issues) • [Request Feature](../../issues)
+  [Live Site](https://wizzit.org) • [How It Works](https://wizzit.org/how-it-works) • [Contributing Guide](CONTRIBUTING.md) • [TURN Setup](TURN_SERVER_CONFIG.md)
 </div>
 
 ## What is Wizzit?
