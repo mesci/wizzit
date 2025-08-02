@@ -1,7 +1,7 @@
 export interface FileTransfer {
   id: string
   file: File
-  status: 'pending' | 'connecting' | 'transferring' | 'completed' | 'failed'
+  status: 'pending' | 'connecting' | 'transferring' | 'completed' | 'failed' | 'pending-approval' | 'cancelled'
   progress: number
   startTime?: Date
   endTime?: Date

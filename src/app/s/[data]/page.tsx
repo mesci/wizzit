@@ -9,6 +9,8 @@ import { getWebRTCManager } from '@/lib/webrtc'
 import { FileTransfer } from '@/types'
 import { logger } from '@/lib/logger'
 import { formatFileSize, getFileIcon } from '@/lib/utils'
+import SecurityWarning from '@/components/SecurityWarning'
+import { SecurityWarning as SecurityWarningType } from '@/lib/security'
 
 // Helper function to calculate transfer speed
 const calculateTransferSpeed = (transfer: FileTransfer) => {
@@ -64,6 +66,12 @@ export default function ReceivePage() {
   const [showConnectingHint, setShowConnectingHint] = useState(false)
   const [failTimeout, setFailTimeout] = useState<NodeJS.Timeout | null>(null)
   const [vpnWarning, setVpnWarning] = useState<{ show: boolean; type: 'sender' | 'receiver' | 'both' }>({ show: false, type: 'sender' })
+  const [securityWarning, setSecurityWarning] = useState<{
+    warning: SecurityWarningType
+    fileName: string
+    fileSize: number
+    resolve: (approved: boolean) => void
+  } | null>(null)
   
   // 📱 Mobile Warning System for Large Files  
   const [showMobileWarning, setShowMobileWarning] = useState(false)
@@ -190,6 +198,13 @@ export default function ReceivePage() {
         show: true, 
         type: prev.show && prev.type !== type ? 'both' : type 
       }))
+    }
+    
+    // Set up security warning callback for receiver (where it makes sense!)
+    webrtcManager.onReceiverSecurityWarning = async (warning: SecurityWarningType, fileName: string, fileSize: number): Promise<boolean> => {
+      return new Promise((resolve) => {
+        setSecurityWarning({ warning, fileName, fileSize, resolve })
+      })
     }
     
     const throttledUpdateTransfer = (transfer: FileTransfer) => {
@@ -387,6 +402,22 @@ export default function ReceivePage() {
         setFailTimeout(null)
       }
       setShowConnectingHint(false)
+    }
+  }
+
+  // Security warning handlers for receiver
+  const handleReceiverSecurityApprove = () => {
+    if (securityWarning) {
+      securityWarning.resolve(true)
+      setSecurityWarning(null)
+    }
+  }
+
+  const handleReceiverSecurityCancel = () => {
+    if (securityWarning) {
+      securityWarning.resolve(false)
+      setSecurityWarning(null)
+      setIsConnecting(false) // Stop loading state
     }
   }
 
@@ -832,6 +863,16 @@ export default function ReceivePage() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Security Warning Modal for Receiver */}
+        {securityWarning && (
+          <SecurityWarning
+            warning={securityWarning.warning}
+            file={{ name: securityWarning.fileName, size: securityWarning.fileSize } as File}
+            onApprove={handleReceiverSecurityApprove}
+            onCancel={handleReceiverSecurityCancel}
+          />
+        )}
       </div>
     </div>
   )

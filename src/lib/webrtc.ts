@@ -1,6 +1,7 @@
 import { FileTransfer, PeerConnection, SignalingMessage, FileMetadata, TransferStats } from '@/types'
 import { generateId } from './utils'
 import { logger } from './logger'
+import { securityChecker, type SecurityWarning } from './security'
 
 export class WebRTCManager {
   private connections: Map<string, PeerConnection> = new Map()
@@ -8,6 +9,11 @@ export class WebRTCManager {
   private onTransferUpdate?: (transfer: FileTransfer) => void
   private onConnectionUpdate?: (connection: PeerConnection) => void
   public onVpnDetected?: (type: 'sender' | 'receiver') => void
+  public onReceiverSecurityWarning?: (warning: SecurityWarning, fileName: string, fileSize: number) => Promise<boolean>
+  
+  // Transfer pause control for security approval
+  private transferPaused: boolean = false
+  private pausedTransferId: string | null = null
   
   // Web Worker for background chunk processing - CRITICAL FOR PERFORMANCE!
   private chunkWorker: Worker | null = null
@@ -130,11 +136,12 @@ export class WebRTCManager {
       this.startFileSending(transferId)
     }
 
-    // Listen for progress synchronization from receiver
+    // Listen for progress synchronization and transfer control from receiver
     dataChannel.onmessage = (event) => {
       try {
         if (typeof event.data === 'string') {
           const data = JSON.parse(event.data)
+          
           if (data.type === 'progress-sync') {
             // Synchronize sender progress with receiver's actual progress
             const transfer = this.transfers.get(transferId)
@@ -142,6 +149,36 @@ export class WebRTCManager {
               transfer.progress = Math.min(data.progress, 100)
               this.onTransferUpdate?.(transfer)
               logger.log(`🔄 Progress synced: ${data.progress.toFixed(1)}% (${data.chunksReceived}/${data.totalChunks})`)
+            }
+          } else if (data.type === 'transfer-pause') {
+            // 🛑 Receiver requested pause (security approval pending)
+            logger.log('🛑 SENDER: Received pause request from receiver:', data.reason)
+            const transfer = this.transfers.get(transferId)
+            if (transfer) {
+              transfer.status = 'pending-approval'
+              this.onTransferUpdate?.(transfer)
+            }
+            // Set pause flag (will be checked in startFileSending)
+            this.transferPaused = true
+            this.pausedTransferId = transferId
+          } else if (data.type === 'transfer-resume') {
+            // ✅ Receiver approved, resume transfer
+            logger.log('✅ SENDER: Received resume request from receiver:', data.reason)
+            const transfer = this.transfers.get(transferId)
+            if (transfer && transfer.status === 'pending-approval') {
+              transfer.status = 'transferring'
+              this.onTransferUpdate?.(transfer)
+            }
+            // Clear pause flag
+            this.transferPaused = false
+            this.pausedTransferId = null
+          } else if (data.type === 'transfer-cancel') {
+            // 🛑 Receiver cancelled transfer
+            logger.log('🛑 SENDER: Receiver cancelled transfer:', data.reason)
+            const transfer = this.transfers.get(transferId)
+            if (transfer) {
+              transfer.status = 'cancelled'
+              this.onTransferUpdate?.(transfer)
             }
           }
         }
@@ -336,8 +373,10 @@ export class WebRTCManager {
       let expectedChunks = 0
       let chunksReceived = 0
       let lastProgressUpdate = 0
+      let transferPendingApproval = false
+      let pendingChunksBuffer: ArrayBuffer[] = []
 
-      dataChannel.onmessage = (event) => {
+      dataChannel.onmessage = async (event) => {
         try {
           if (typeof event.data === 'string') {
             const data = JSON.parse(event.data)
@@ -356,27 +395,148 @@ export class WebRTCManager {
             // Receiving file metadata
             receivedFile = data as FileMetadata
             expectedChunks = receivedFile.chunks
-            const transferId = generateId()
             
-            const transfer: FileTransfer = {
-              id: transferId,
-              file: new File([], receivedFile.name), // Placeholder
-              status: 'transferring',
-              progress: 0,
-              startTime: new Date(),
-              peer: pc
+            // 🛡️ Security check on receiver side (where it makes sense!)
+            const securityWarning = securityChecker.checkFile({ 
+              name: receivedFile.name, 
+              size: receivedFile.size 
+            } as File)
+            
+            if (securityWarning && this.onReceiverSecurityWarning) {
+              logger.log('🛡️ Receiver security warning for:', receivedFile.name)
+              transferPendingApproval = true
+              
+              // 🛑 Tell sender to pause transfer immediately
+              try {
+                dataChannel.send(JSON.stringify({ 
+                  type: 'transfer-pause', 
+                  reason: 'security-approval-pending' 
+                }))
+                logger.log('🛑 Sent pause signal to sender')
+              } catch (error) {
+                logger.error('❌ Failed to send pause signal:', error)
+              }
+              
+              try {
+                const userApproved = await this.onReceiverSecurityWarning(
+                  securityWarning, 
+                  receivedFile.name, 
+                  receivedFile.size
+                )
+                
+                transferPendingApproval = false
+                
+                if (!userApproved) {
+                  logger.log('🛡️ Receiver cancelled transfer due to security warning')
+                  
+                  // 🛑 Tell sender transfer was cancelled
+                  try {
+                    dataChannel.send(JSON.stringify({ 
+                      type: 'transfer-cancel', 
+                      reason: 'security-rejected' 
+                    }))
+                    logger.log('🛑 Sent cancel signal to sender')
+                  } catch (error) {
+                    logger.error('❌ Failed to send cancel signal:', error)
+                  }
+                  
+                  // Close the data channel to stop receiving chunks
+                  dataChannel.close()
+                  return
+                }
+                
+                logger.log('🛡️ Receiver approved transfer despite security warning')
+                
+                // ✅ Tell sender to resume transfer
+                try {
+                  dataChannel.send(JSON.stringify({ 
+                    type: 'transfer-resume', 
+                    reason: 'security-approved' 
+                  }))
+                  logger.log('✅ Sent resume signal to sender')
+                } catch (error) {
+                  logger.error('❌ Failed to send resume signal:', error)
+                }
+                
+                // Now create the transfer since it's approved
+                const transferId = generateId()
+                
+                const transfer: FileTransfer = {
+                  id: transferId,
+                  file: new File([], receivedFile.name), // Placeholder
+                  status: 'transferring',
+                  progress: 0,
+                  startTime: new Date(),
+                  peer: pc
+                }
+                
+                this.transfers.set(transferId, transfer)
+                this.onTransferUpdate?.(transfer)
+                logger.log('📊 Transfer created after security approval')
+                
+                // Pre-allocate memory for optimal performance
+                receivedChunks = new Array(expectedChunks)
+                logger.log('⚡ Pre-allocated array for', expectedChunks, 'chunks')
+                
+                // Process any buffered chunks that arrived during approval
+                if (pendingChunksBuffer.length > 0) {
+                  logger.log('🛡️ Processing', pendingChunksBuffer.length, 'buffered chunks')
+                  for (const bufferedChunk of pendingChunksBuffer) {
+                    // Process each buffered chunk as if it just arrived
+                    chunksReceived++
+                    const chunkIndex = chunksReceived - 1
+                    receivedChunks[chunkIndex] = bufferedChunk
+                    bytesReceived += bufferedChunk.byteLength
+                  }
+                  pendingChunksBuffer = [] // Clear buffer
+                  
+                  // Update progress for buffered chunks
+                  const progress = (chunksReceived / expectedChunks) * 100
+                  transfer.progress = Math.min(progress, 100)
+                  this.onTransferUpdate?.(transfer)
+                }
+                
+              } catch (error) {
+                logger.error('🛡️ Security warning error:', error)
+                transferPendingApproval = false
+                dataChannel.close()
+                return
+              }
             }
             
-            this.transfers.set(transferId, transfer)
-            this.onTransferUpdate?.(transfer)
-            logger.log('📊 File metadata received, expecting', expectedChunks, 'chunks')
-            
-            // Pre-allocate memory for optimal performance
-            receivedChunks = new Array(expectedChunks)
-            logger.log('⚡ Pre-allocated array for', expectedChunks, 'chunks')
+            // Only create transfer if not pending approval
+            if (!transferPendingApproval) {
+              const transferId = generateId()
+              
+              const transfer: FileTransfer = {
+                id: transferId,
+                file: new File([], receivedFile.name), // Placeholder
+                status: 'transferring',
+                progress: 0,
+                startTime: new Date(),
+                peer: pc
+              }
+              
+              this.transfers.set(transferId, transfer)
+              this.onTransferUpdate?.(transfer)
+              logger.log('📊 File metadata received, expecting', expectedChunks, 'chunks')
+              
+              // Pre-allocate memory for optimal performance
+              receivedChunks = new Array(expectedChunks)
+              logger.log('⚡ Pre-allocated array for', expectedChunks, 'chunks')
+            } else {
+              logger.log('🛡️ Transfer creation deferred - waiting for security approval')
+            }
           } else {
             // Receiving file chunks with ACCURATE progress tracking
             if (!receivedFile) return
+
+            // 🛡️ If transfer is pending security approval, buffer chunks instead of processing
+            if (transferPendingApproval) {
+              logger.log('🛡️ Buffering chunk while waiting for security approval')
+              pendingChunksBuffer.push(event.data as ArrayBuffer)
+              return // Don't process chunks until approved
+            }
 
             chunksReceived++
             const chunkIndex = chunksReceived - 1
@@ -536,6 +696,19 @@ export class WebRTCManager {
     const wait = (ms: number) => new Promise(res => setTimeout(res, ms))
 
     while (offset < transfer.file.size) {
+      // 🛑 Check if transfer is paused by receiver (security approval pending)
+      while (this.transferPaused && this.pausedTransferId === transferId) {
+        logger.log('🛑 SENDER: Transfer paused, waiting for receiver approval...')
+        await wait(100) // Check every 100ms
+      }
+      
+      // Check if transfer was cancelled (refresh transfer state)
+      const currentTransfer = this.transfers.get(transferId)
+      if (currentTransfer && (currentTransfer.status === 'cancelled' || currentTransfer.status === 'failed')) {
+        logger.log('🛑 SENDER: Transfer was cancelled/failed, stopping')
+        return
+      }
+      
       // Flow-control: wait if buffer is high
       while (dataChannel.bufferedAmount > this.maxBufferedAmount) {
         await wait(this.bufferMonitorInterval)

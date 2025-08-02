@@ -177,11 +177,17 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                             <div className={`w-2 h-2 rounded-full ${
                               transfer.status === 'completed' ? 'bg-green-500' : 
                               transfer.status === 'transferring' ? 'bg-blue-500 animate-pulse' :
+                              transfer.status === 'pending-approval' ? 'bg-amber-500 animate-pulse' :
+                              transfer.status === 'cancelled' ? 'bg-red-500' :
+                              transfer.status === 'failed' ? 'bg-red-500' :
                               'bg-gray-400'
                             }`} />
                             <span className="text-xs sm:text-sm font-medium text-gray-900">
                               {transfer.status === 'completed' ? 'Complete' : 
                                transfer.status === 'transferring' ? 'Transferring...' :
+                               transfer.status === 'pending-approval' ? 'Waiting for recipient approval...' :
+                               transfer.status === 'cancelled' ? 'Recipient cancelled transfer' :
+                               transfer.status === 'failed' ? 'Transfer failed' :
                                'Connecting...'}
                             </span>
                           </div>
@@ -194,7 +200,10 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                         <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2 mb-2">
                           <motion.div 
                             className={`h-1.5 sm:h-2 rounded-full ${
-                              transfer.status === 'completed' ? 'bg-green-500' : 'bg-gray-900'
+                              transfer.status === 'completed' ? 'bg-green-500' : 
+                              transfer.status === 'cancelled' || transfer.status === 'failed' ? 'bg-red-500' :
+                              transfer.status === 'pending-approval' ? 'bg-amber-500' : 
+                              'bg-gray-900'
                             }`}
                             initial={{ width: 0 }}
                             animate={{ width: `${activeTransfer?.id === transfer.id ? throttledProgress : (transfer.progress || 0)}%` }}

@@ -7,10 +7,12 @@ import { FileUpload } from '@/components/FileUpload'
 import { ShareModal } from '@/components/ShareModal'
 import { TransferProgress } from '@/components/TransferProgress'
 import { Header } from '@/components/Header'
+
 import { FileTransfer } from '@/types'
 import { getWebRTCManager } from '@/lib/webrtc'
 import { getRandomWittyMessage } from '@/lib/utils'
 import { logger } from '@/lib/logger'
+
 
 // Simple animated text component
 function AnimatedText() {
