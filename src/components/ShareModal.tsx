@@ -101,14 +101,17 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
           <div className="p-4 sm:p-6 border-b border-gray-200 flex-shrink-0">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 flex items-center justify-center">
-                  <img 
-                    src="/badge.svg" 
-                    alt="Success" 
-                    width="32" 
-                    height="32"
-                    className="w-8 h-8"
-                  />
+                <div className="w-8 h-8 flex items-center justify-center rounded-full bg-white border border-gray-200 overflow-hidden" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" className="w-6 h-6" preserveAspectRatio="xMidYMid meet">
+                    <defs>
+                      <linearGradient id="gr-check" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stopColor="#F4C015" />
+                        <stop offset="100%" stopColor="#FF9822" />
+                      </linearGradient>
+                    </defs>
+                    <circle cx="12" cy="12" r="10" fill="url(#gr-check)" />
+                    <path d="M7.5 12.5l3 3L16.5 9" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
                 </div>
                 <div className="min-w-0 flex-1">
                   <h2 className="text-lg font-medium text-gray-900">File ready</h2>

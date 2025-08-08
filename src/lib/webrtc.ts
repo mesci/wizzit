@@ -15,6 +15,10 @@ export class WebRTCManager {
   private transferPaused: boolean = false
   private pausedTransferId: string | null = null
   
+  // Trickle ICE support
+  private pendingLocalCandidates: Map<string, RTCIceCandidateInit[]> = new Map()
+  private remotePeerIdForTransfer: Map<string, string> = new Map()
+  
   // Web Worker for background chunk processing - CRITICAL FOR PERFORMANCE!
   private chunkWorker: Worker | null = null
   private pendingChunks: Map<number, { resolve: (buffer: ArrayBuffer) => void; reject: (error: Error) => void }> = new Map()
@@ -22,10 +26,10 @@ export class WebRTCManager {
   // ICE servers will be loaded dynamically from API
   private iceServers: RTCIceServer[] = []
 
-  // Performance settings - BALANCED and TESTED configuration
-  private readonly chunkSize = 16 * 1024 // 16KB chunks - SMOOTH progress for all devices/networks
+  // Performance settings - tuned for higher throughput
+  private readonly chunkSize = 64 * 1024 // 64KB chunks – better throughput with low overhead
   private readonly maxFileSize = 1024 * 1024 * 1024 * 1024 // 1TB limit - Practically unlimited!
-  private readonly maxBufferedAmount = 8 * 1024 * 1024 // 8MB buffer - TESTED and working
+  private readonly maxBufferedAmount = 16 * 1024 * 1024 // 16MB buffer – better burst throughput
   private readonly bufferMonitorInterval = 1 // 1ms for faster throughput
 
   constructor() {
@@ -66,33 +70,33 @@ export class WebRTCManager {
     const transferId = generateId()
     const connectionId = generateId()
 
-    // 🔍 VPN Detection (basic heuristic)
-    const isVpnLikely = await this.detectVpnEnvironment()
-    
-    // Create peer connection with EXTREME performance settings for WARP/VPN
+    // Create peer connection with fast startup (trickle ICE)
     const pc = new RTCPeerConnection({ 
       iceServers: this.iceServers,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: isVpnLikely ? 10 : 50, // Reduce for VPN to speed up
-      // FORCE TURN for VPN users for reliability
-      iceTransportPolicy: isVpnLikely ? 'relay' : 'all'
+      iceCandidatePoolSize: 2,
+      iceTransportPolicy: 'all'
     })
     
-    if (isVpnLikely) {
-      logger.log('🌐 VPN/restrictive network detected - using TURN-only mode')
-      
-      // Notify UI about VPN detection
-      if (this.onVpnDetected) {
+    // Run VPN detection in background (non-blocking)
+    let vpnLikelyForSender = false
+    this.detectVpnEnvironment().then((isVpnLikely) => {
+      vpnLikelyForSender = isVpnLikely
+      if (isVpnLikely && this.onVpnDetected) {
         logger.log('🚨 Notifying UI about VPN detection...')
         this.onVpnDetected('sender')
       }
-    }
+    }).catch(() => {})
     
-    // Create data channel with MAXIMUM throughput settings
+    // Create data channel with throughput-friendly settings
     const dataChannel = pc.createDataChannel('fileTransfer', {
       ordered: true
     })
+    // Prefer binary ArrayBuffer to avoid extra copies
+    try { (dataChannel as any).binaryType = 'arraybuffer' } catch {}
+    // Configure backpressure threshold for event-driven flow control
+    try { dataChannel.bufferedAmountLowThreshold = this.maxBufferedAmount / 2 } catch {}
 
     const connection: PeerConnection = {
       id: connectionId,
@@ -121,8 +125,8 @@ export class WebRTCManager {
       this.onConnectionUpdate?.(connection)
       this.onTransferUpdate?.(transfer)
       
-      // Send VPN info to receiver if detected
-      if (isVpnLikely) {
+      // Send VPN info to receiver if detected (best-effort)
+      if (vpnLikelyForSender) {
         logger.log('📡 Sending VPN info to receiver via WebRTC...')
         try {
           dataChannel.send(JSON.stringify({ type: 'vpn-info', senderHasVpn: true }))
@@ -146,8 +150,18 @@ export class WebRTCManager {
             // Synchronize sender progress with receiver's actual progress
             const transfer = this.transfers.get(transferId)
             if (transfer) {
-              transfer.progress = Math.min(data.progress, 100)
-              this.onTransferUpdate?.(transfer)
+              const newProgress = Math.min(data.progress, 100)
+              // Throttle UI updates: only if >=1% change or 150ms past last update
+              const last = (transfer as any).__lastProgressUpdateTs || 0
+              const lastVal = (transfer as any).__lastProgressValue || 0
+              const nowTs = Date.now()
+              const shouldUpdate = (nowTs - last > 150) || (Math.abs(newProgress - lastVal) >= 1)
+              transfer.progress = newProgress
+              if (shouldUpdate) {
+                ;(transfer as any).__lastProgressUpdateTs = nowTs
+                ;(transfer as any).__lastProgressValue = newProgress
+                this.onTransferUpdate?.(transfer)
+              }
               logger.log(`🔄 Progress synced: ${data.progress.toFixed(1)}% (${data.chunksReceived}/${data.totalChunks})`)
             }
           } else if (data.type === 'transfer-pause') {
@@ -189,25 +203,58 @@ export class WebRTCManager {
 
     dataChannel.onerror = (error) => {
       logger.error('🔴 DATA CHANNEL ERROR on sender side:', error)
-      transfer.status = 'failed'
-      connection.status = 'failed'
-      this.onTransferUpdate?.(transfer)
-      this.onConnectionUpdate?.(connection)
+      // Do not downgrade already-completed transfers
+      if ((transfer.status as any) !== 'completed') {
+        transfer.status = 'failed'
+        connection.status = 'failed'
+        this.onTransferUpdate?.(transfer)
+        this.onConnectionUpdate?.(connection)
+      } else {
+        logger.log('ℹ️ Data channel error after completion – ignoring for transfer status')
+      }
     }
 
     dataChannel.onclose = () => {
       logger.log('🟡 DATA CHANNEL CLOSED on sender side')
-      connection.status = 'disconnected'
-      this.onConnectionUpdate?.(connection)
+      // Avoid showing disconnect/failure after a successful transfer
+      if ((transfer.status as any) !== 'completed') {
+        connection.status = 'disconnected'
+        this.onConnectionUpdate?.(connection)
+      } else {
+        logger.log('ℹ️ Data channel closed after completion – ignoring UI downgrade')
+      }
     }
 
-    // Add ICE candidate handling for sender
-    pc.onicecandidate = (event) => {
+    // Add ICE candidate handling for sender (trickle ICE)
+    pc.onicecandidate = async (event) => {
       if (event.candidate) {
-        logger.log('🧊 ICE Candidate found (sender):', event.candidate)
-        // Store ICE candidate for signaling
-        // In a real app, you'd send this via signaling immediately
-        // For now we'll collect them and send via API
+        const candidate: RTCIceCandidateInit = event.candidate.toJSON()
+        logger.log('🧊 ICE Candidate found (sender):', candidate)
+        const remotePeerId = this.remotePeerIdForTransfer.get(transferId)
+        if (remotePeerId) {
+          try {
+            await fetch('/api/signal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'ice-candidate',
+                senderId: transferId,
+                receiverId: remotePeerId,
+                data: candidate
+              })
+            })
+          } catch (e) {
+            // If send fails, buffer and retry later
+            const buf = this.pendingLocalCandidates.get(transferId) || []
+            buf.push(candidate)
+            this.pendingLocalCandidates.set(transferId, buf)
+          }
+        } else {
+          // Buffer until we learn receiver's connectionId via answer
+          const buf = this.pendingLocalCandidates.get(transferId) || []
+          buf.push(candidate)
+          this.pendingLocalCandidates.set(transferId, buf)
+        }
       } else {
         logger.log('🏁 ICE Candidate gathering complete (sender)')
       }
@@ -216,6 +263,10 @@ export class WebRTCManager {
     // Add connection state logging
     pc.onconnectionstatechange = () => {
       logger.log('🔗 Peer Connection State Changed:', pc.connectionState)
+      // Prevent UI downgrade after completion
+      if ((transfer.status as any) === 'completed') {
+        return
+      }
     }
 
     // Enhanced ICE connection handling with auto-retry for VPN/restrictive networks
@@ -229,6 +280,11 @@ export class WebRTCManager {
         logger.error('🔴 ICE CONNECTION FAILED')
         iceFailureCount++
         
+        if ((transfer.status as any) === 'completed') {
+          logger.log('ℹ️ ICE failed after transfer completion – keeping transfer as completed')
+          return
+        }
+
         if (iceFailureCount <= maxRetries) {
           logger.log(`🔄 ICE failure #${iceFailureCount} - attempting TURN-only retry...`)
           
@@ -248,24 +304,30 @@ export class WebRTCManager {
             logger.log('🔧 TURN servers available:', turnOnlyConfig.iceServers.length)
             
             // Don't restart immediately, mark as retry mode
-            transfer.status = 'connecting'
-            connection.status = 'connecting'
-            this.onTransferUpdate?.(transfer)
-            this.onConnectionUpdate?.(connection)
+            if ((transfer.status as any) !== 'completed') {
+              transfer.status = 'connecting'
+              connection.status = 'connecting'
+              this.onTransferUpdate?.(transfer)
+              this.onConnectionUpdate?.(connection)
+            }
             
           } catch (retryError) {
             logger.error('❌ TURN-only retry failed:', retryError)
+            if ((transfer.status as any) !== 'completed') {
+              transfer.status = 'failed'
+              connection.status = 'failed'
+              this.onTransferUpdate?.(transfer)
+              this.onConnectionUpdate?.(connection)
+            }
+          }
+        } else {
+          logger.error(`❌ Max retries (${maxRetries}) exceeded - connection permanently failed`)
+          if ((transfer.status as any) !== 'completed') {
             transfer.status = 'failed'
             connection.status = 'failed'
             this.onTransferUpdate?.(transfer)
             this.onConnectionUpdate?.(connection)
           }
-        } else {
-          logger.error(`❌ Max retries (${maxRetries}) exceeded - connection permanently failed`)
-          transfer.status = 'failed'
-          connection.status = 'failed'
-          this.onTransferUpdate?.(transfer)
-          this.onConnectionUpdate?.(connection)
         }
       } else if (pc.iceConnectionState === 'connected') {
         logger.log('🟢 ICE CONNECTION ESTABLISHED')
@@ -283,40 +345,9 @@ export class WebRTCManager {
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
 
-    logger.log('🎯 Initial offer created, waiting for ICE gathering...')
-    
-    // Wait for ICE gathering to complete to get all candidates in SDP
-    await new Promise<void>((resolve) => {
-      if (pc.iceGatheringState === 'complete') {
-        logger.log('✅ ICE gathering already complete for sender')
-        resolve()
-        return
-      }
-      
-      const handleIceGatheringChange = () => {
-        logger.log('🔍 Sender ICE gathering state changed to:', pc.iceGatheringState)
-        if (pc.iceGatheringState === 'complete') {
-          logger.log('✅ Sender ICE gathering completed, final SDP ready')
-          pc.removeEventListener('icegatheringstatechange', handleIceGatheringChange)
-          resolve()
-        }
-      }
-      
-      pc.addEventListener('icegatheringstatechange', handleIceGatheringChange)
-      
-      // Smart timeout based on VPN detection
-      const timeoutMs = isVpnLikely ? 5000 : 10000 // 5s for VPN (TURN-only), 10s for others
-      setTimeout(() => {
-        logger.log(`⏰ Sender ICE gathering timeout after ${timeoutMs}ms - ${isVpnLikely ? 'VPN' : 'Normal'} mode`)
-        pc.removeEventListener('icegatheringstatechange', handleIceGatheringChange)
-        resolve()
-      }, timeoutMs)
-    })
-
-    // Get the final offer with ICE candidates embedded
+    // Trickle ICE: return offer immediately without waiting for ICE complete
     const finalOffer = pc.localDescription
-    logger.log('📋 Final offer SDP preview:', finalOffer?.sdp?.substring(0, 300) + '...')
-
+    logger.log('📋 Offer SDP preview:', finalOffer?.sdp?.substring(0, 300) + '...')
     return { transferId, offer: finalOffer || offer }
   }
 
@@ -329,28 +360,22 @@ export class WebRTCManager {
       await this.loadIceServers()
     }
     
-    // 🔍 VPN Detection for receiver
-    const isVpnLikely = await this.detectVpnEnvironment()
-    
-    // Create peer connection with EXTREME performance settings for WARP/VPN
+    // Create peer connection with fast startup (trickle ICE)
     const pc = new RTCPeerConnection({ 
       iceServers: this.iceServers,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: isVpnLikely ? 10 : 50, // Reduce for VPN to speed up
-      // FORCE TURN for VPN users for reliability
-      iceTransportPolicy: isVpnLikely ? 'relay' : 'all'
+      iceCandidatePoolSize: 2,
+      iceTransportPolicy: 'all'
     })
     
-    if (isVpnLikely) {
-      logger.log('🌐 VPN/restrictive network detected on receiver - using TURN-only mode')
-      
-      // Notify UI about VPN detection
-      if (this.onVpnDetected) {
+    // Background VPN detection
+    this.detectVpnEnvironment().then((isVpnLikely) => {
+      if (isVpnLikely && this.onVpnDetected) {
         logger.log('🚨 Notifying receiver UI about VPN detection...')
         this.onVpnDetected('receiver')
       }
-    }
+    }).catch(() => {})
 
     const connection: PeerConnection = {
       id: connectionId,
@@ -366,6 +391,7 @@ export class WebRTCManager {
       logger.log('📺 DATA CHANNEL RECEIVED!', event.channel)
       const dataChannel = event.channel
       connection.dataChannel = dataChannel
+      try { (dataChannel as any).binaryType = 'arraybuffer' } catch {}
       
       let receivedFile: FileMetadata | null = null
       let receivedChunks: ArrayBuffer[] = []
@@ -548,16 +574,24 @@ export class WebRTCManager {
             // ACCURATE progress calculation based on chunks received
             const progress = (chunksReceived / expectedChunks) * 100
 
-            // Send progress feedback to sender for perfect synchronization
+            // Throttled progress feedback to sender (reduce chatter)
             try {
-              dataChannel.send(JSON.stringify({ 
-                type: 'progress-sync', 
-                progress: progress,
-                chunksReceived: chunksReceived,
-                totalChunks: expectedChunks
-              }))
+              const nowTs = Date.now()
+              const lastFeedback = (pc as any).__lastProgressFeedbackTs || 0
+              const lastFeedbackVal = (pc as any).__lastProgressFeedbackVal || 0
+              const shouldFeedback = (nowTs - lastFeedback > 150) || (Math.abs(progress - lastFeedbackVal) >= 1)
+              if (shouldFeedback) {
+                dataChannel.send(JSON.stringify({ 
+                  type: 'progress-sync', 
+                  progress: progress,
+                  chunksReceived: chunksReceived,
+                  totalChunks: expectedChunks
+                }))
+                ;(pc as any).__lastProgressFeedbackTs = nowTs
+                ;(pc as any).__lastProgressFeedbackVal = progress
+              }
             } catch (error) {
-              // Ignore feedback errors, don't break transfer
+              // Ignore feedback errors
             }
 
             // Update progress SMOOTHLY - optimized for mobile
@@ -631,15 +665,7 @@ export class WebRTCManager {
 
     this.connections.set(connectionId, connection)
 
-    // Add ICE candidate handling for receiver  
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        logger.log('🧊 ICE Candidate found (receiver):', event.candidate)
-        // Store ICE candidate for signaling
-      } else {
-        logger.log('🏁 ICE Candidate gathering complete (receiver)')
-      }
-    }
+    // ICE candidates will be signaled by handleOffer() once sender transferId is known
 
     // Add connection state logging for receiver
     pc.onconnectionstatechange = () => {
@@ -695,49 +721,77 @@ export class WebRTCManager {
 
     const wait = (ms: number) => new Promise(res => setTimeout(res, ms))
 
+    // Event-driven backpressure helpers
+    const lowThreshold = Math.max(this.chunkSize * 4, this.maxBufferedAmount - this.chunkSize * 16)
+    try { dataChannel.bufferedAmountLowThreshold = lowThreshold } catch {}
+
+    const waitForBufferedAmountBelow = (limit: number) => new Promise<void>((resolve) => {
+      if (dataChannel.bufferedAmount <= limit) {
+        resolve()
+        return
+      }
+      const handler = () => {
+        if (dataChannel.bufferedAmount <= limit) {
+          dataChannel.removeEventListener('bufferedamountlow', handler as any)
+          resolve()
+        }
+      }
+      dataChannel.addEventListener('bufferedamountlow', handler as any)
+    })
+
+    const sendWithBackpressure = async (payload: ArrayBuffer) => {
+      // Prevent overshoot
+      if (dataChannel.bufferedAmount + payload.byteLength > this.maxBufferedAmount) {
+        await waitForBufferedAmountBelow(lowThreshold)
+      }
+      for (;;) {
+        try {
+          dataChannel.send(payload)
+          return
+        } catch (e: any) {
+          if (typeof e?.message === 'string' && e.message.includes('send queue is full')) {
+            await waitForBufferedAmountBelow(lowThreshold)
+            continue
+          }
+          throw e
+        }
+      }
+    }
+
     while (offset < transfer.file.size) {
       // 🛑 Check if transfer is paused by receiver (security approval pending)
       while (this.transferPaused && this.pausedTransferId === transferId) {
         logger.log('🛑 SENDER: Transfer paused, waiting for receiver approval...')
         await wait(100) // Check every 100ms
       }
-      
-      // Check if transfer was cancelled (refresh transfer state)
+
       const currentTransfer = this.transfers.get(transferId)
       if (currentTransfer && (currentTransfer.status === 'cancelled' || currentTransfer.status === 'failed')) {
         logger.log('🛑 SENDER: Transfer was cancelled/failed, stopping')
         return
       }
-      
-      // Flow-control: wait if buffer is high
-      while (dataChannel.bufferedAmount > this.maxBufferedAmount) {
-        await wait(this.bufferMonitorInterval)
+
+      // Wait for buffer to drop below threshold (event-driven)
+      if (dataChannel.bufferedAmount > this.maxBufferedAmount) {
+        await waitForBufferedAmountBelow(lowThreshold)
       }
 
       const chunk = transfer.file.slice(offset, offset + this.chunkSize)
-
       try {
-        // 🚀 FAST: Process chunk directly for better performance
         const arrayBuffer = await chunk.arrayBuffer()
-        
-        dataChannel.send(arrayBuffer)
+        await sendWithBackpressure(arrayBuffer)
         chunksSent++
         offset += chunk.size
 
-        // Simple progress based on chunks sent (receiver will sync the real progress)
         const localProgress = (chunksSent / totalChunks) * 100
-        
-        // Only update if our calculation is higher than current progress (receiver may have updated)
         if (localProgress > transfer.progress) {
-          transfer.progress = Math.min(localProgress, 95) // Max 95% until receiver confirms completion
-          
+          transfer.progress = Math.min(localProgress, 95)
           const now = Date.now()
-          if (now - lastProgressUpdate > 16) { // 60fps for smooth progress
+          if (now - lastProgressUpdate > 50) { // throttle a bit more
             this.onTransferUpdate?.(transfer)
             lastProgressUpdate = now
           }
         }
-
       } catch (err) {
         logger.error('❌ Error processing/sending chunk', err)
         transfer.status = 'failed'
@@ -1058,9 +1112,11 @@ export class WebRTCManager {
     } else {
       logger.log('🔍 No DataChannel found in connection')
     }
+
+    // Receiver connection id will be learned via signaling metadata (not embedded in SDP)
   }
 
-  async handleOffer(connectionId: string, offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+  async handleOffer(connectionId: string, offer: RTCSessionDescriptionInit, senderTransferId: string): Promise<RTCSessionDescriptionInit> {
     const connection = this.connections.get(connectionId)
     if (!connection) throw new Error('Connection not found')
 
@@ -1068,42 +1124,58 @@ export class WebRTCManager {
     const answer = await connection.connection.createAnswer()
     await connection.connection.setLocalDescription(answer)
 
-    logger.log('🎯 Initial answer created, waiting for receiver ICE gathering...')
-    
-    // Wait for ICE gathering to complete to get all candidates in SDP
-    await new Promise<void>((resolve) => {
-      const pc = connection.connection
-      
-      if (pc.iceGatheringState === 'complete') {
-        logger.log('✅ Receiver ICE gathering already complete')
-        resolve()
-        return
-      }
-      
-      const handleIceGatheringChange = () => {
-        logger.log('🔍 Receiver ICE gathering state changed to:', pc.iceGatheringState)
-        if (pc.iceGatheringState === 'complete') {
-          logger.log('✅ Receiver ICE gathering completed, final answer SDP ready')
-          pc.removeEventListener('icegatheringstatechange', handleIceGatheringChange)
-          resolve()
-        }
-      }
-      
-      pc.addEventListener('icegatheringstatechange', handleIceGatheringChange)
-      
-      // Fallback timeout - increased for VPN scenarios
-      setTimeout(() => {
-        logger.log('⏰ Receiver ICE gathering timeout')
-        pc.removeEventListener('icegatheringstatechange', handleIceGatheringChange)
-        resolve()
-      }, 10000) // 10s timeout for faster connection
-    })
+    logger.log('🎯 Answer created (trickle ICE) – returning immediately')
 
-    // Get the final answer with ICE candidates embedded
-    const finalAnswer = connection.connection.localDescription
-    logger.log('📋 Final answer SDP preview:', finalAnswer?.sdp?.substring(0, 300) + '...')
+    // Trickle ICE from receiver to sender
+    const pc = connection.connection
+    pc.onicecandidate = async (event) => {
+      if (event.candidate) {
+        const candidate: RTCIceCandidateInit = event.candidate.toJSON()
+        logger.log('🧊 ICE Candidate found (receiver):', candidate)
+        try {
+          await fetch('/api/signal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'ice-candidate',
+              senderId: connectionId,
+              receiverId: senderTransferId,
+              data: candidate
+            })
+          })
+        } catch {}
+      } else {
+        logger.log('🏁 ICE Candidate gathering complete (receiver)')
+      }
+    }
 
-    return finalAnswer || answer
+    const finalAnswer = connection.connection.localDescription || answer
+    logger.log('📋 Answer SDP preview:', finalAnswer?.sdp?.substring(0, 300) + '...')
+    return finalAnswer
+  }
+
+  // Public: register remote peer id for a given transfer and flush buffered ICE candidates
+  async registerRemotePeer(transferId: string, remoteConnectionId: string) {
+    this.remotePeerIdForTransfer.set(transferId, remoteConnectionId)
+    const pending = this.pendingLocalCandidates.get(transferId) || []
+    if (pending.length > 0) {
+      logger.log('📤 Flushing', pending.length, 'pending ICE candidates to receiver')
+      for (const cand of pending) {
+        try {
+          await fetch('/api/signal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'ice-candidate',
+              senderId: transferId,
+              receiverId: remoteConnectionId,
+              data: cand
+            })
+          })
+        } catch {}
+      }
+      this.pendingLocalCandidates.delete(transferId)
+    }
   }
 
   async addIceCandidate(id: string, candidate: RTCIceCandidateInit) {
@@ -1246,7 +1318,8 @@ export class WebRTCManager {
         
         // Test TURN server connectivity
         if (this.iceServers.length > 0) {
-          await this.testTurnConnectivity()
+          // Run TURN connectivity test in background – do not block startup
+          this.testTurnConnectivity().catch(() => {})
         }
       } else {
         logger.warn('⚠️ Failed to load ICE servers from API, using fallback')

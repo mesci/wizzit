@@ -231,14 +231,26 @@ export default function HomePage() {
               try {
                 // Handle the answer to complete the connection
                 await webrtcManager.handleAnswer(transferId, signal.data)
-                logger.log('🎉 Answer processed successfully! Connection established.')
-                
-                // Stop polling once we get an answer
-                isPolling = false
-                logger.log('🛑 Signaling polling stopped - answer received')
-                return
+                logger.log('🎉 Answer processed successfully! Connection established (continuing to poll for ICE candidates).')
               } catch (answerError) {
                 logger.error('💥 Error processing answer:', answerError)
+              }
+            } else if (signal.type === 'peer-info') {
+              try {
+                const remoteId = signal.data?.receiverConnectionId
+                if (remoteId) {
+                  logger.log('🔗 Registering receiver connection id for trickle ICE:', remoteId)
+                  await webrtcManager.registerRemotePeer(transferId, remoteId)
+                }
+              } catch (e) {
+                logger.error('❌ Failed to register remote peer id:', e)
+              }
+            } else if (signal.type === 'ice-candidate') {
+              try {
+                logger.log('🧊 Adding remote ICE candidate from receiver')
+                await webrtcManager.addIceCandidate(transferId, signal.data)
+              } catch (candErr) {
+                logger.error('❌ Failed to add ICE candidate:', candErr)
               }
             }
           }

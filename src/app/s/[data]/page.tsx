@@ -347,9 +347,9 @@ export default function ReceivePage() {
       const { connectionId, pc } = await webrtcManager.createReceiver()
       logger.log('✅ Receiver connection created:', connectionId)
       
-      // Handle the offer and create answer
+      // Handle the offer and create answer (senderTransferId used for trickle ICE)
       logger.log('🤝 Processing offer and creating answer...')
-      const answer = await webrtcManager.handleOffer(connectionId, offer)
+      const answer = await webrtcManager.handleOffer(connectionId, offer, transferData.transferId)
       logger.log('📝 Answer created successfully:', answer ? 'YES' : 'NO')
       logger.log('📋 Answer preview:', JSON.stringify(answer).substring(0, 200) + '...')
       
@@ -387,6 +387,53 @@ export default function ReceivePage() {
       
       const responseData = await response.json()
       logger.log('✅ Answer sent successfully to sender:', responseData)
+      
+      // Send peer info to sender so it can flush buffered candidates (out-of-band, not in SDP)
+      try {
+        await fetch('/api/signal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'peer-info',
+            senderId: connectionId,
+            receiverId: transferData.transferId,
+            data: { receiverConnectionId: connectionId }
+          })
+        })
+      } catch {}
+      
+      // Start polling for incoming ICE candidates from sender (trickle ICE)
+      let icePolling = true
+      const getInterval = (attempt: number) => (attempt < 10 ? 1000 : attempt < 30 ? 2000 : 5000)
+      let attempts = 0
+      const poll = async () => {
+        if (!icePolling) return
+        attempts++
+        try {
+          const res = await fetch(`/api/signal?receiverId=${connectionId}`)
+          if (res.ok) {
+            const { signals } = await res.json()
+            if (signals && signals.length) {
+              for (const signal of signals) {
+                if (signal.type === 'ice-candidate') {
+                  try {
+                    logger.log('🧊 RECEIVER: Adding ICE candidate from sender')
+                    await webrtcManager.addIceCandidate(connectionId, signal.data)
+                  } catch (e) {
+                    logger.error('❌ RECEIVER: Failed to add ICE candidate', e)
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          logger.error('❌ RECEIVER: ICE polling error', e)
+        }
+        setTimeout(poll, getInterval(attempts))
+      }
+      // Stop after 5 minutes
+      setTimeout(() => { icePolling = false }, 300000)
+      poll()
       
     } catch (err) {
       logger.error('Download failed:', err)

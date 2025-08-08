@@ -39,7 +39,7 @@ export interface TransferHistory {
 }
 
 export interface SignalingMessage {
-  type: 'offer' | 'answer' | 'ice-candidate' | 'close'
+  type: 'offer' | 'answer' | 'ice-candidate' | 'peer-info' | 'close'
   senderId: string
   receiverId: string
   data: any
