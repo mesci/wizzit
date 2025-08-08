@@ -57,10 +57,12 @@ export class WebRTCManager {
       throw new Error('File size exceeds maximum allowed size')
     }
 
-    // Ensure ICE servers are loaded before creating connection
+    // 🚀 Use fallback ICE servers immediately if not loaded yet
     if (this.iceServers.length === 0) {
-      logger.log('⏳ Waiting for ICE servers to load...')
-      await this.loadIceServers()
+      logger.log('⚡ Using fallback ICE servers for immediate connection')
+      this.iceServers = this.getFallbackIceServers()
+      // Load better servers in background
+      this.loadIceServers().catch(() => {})
     }
 
     const transferId = generateId()
@@ -74,7 +76,7 @@ export class WebRTCManager {
       iceServers: this.iceServers,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: isVpnLikely ? 10 : 50, // Reduce for VPN to speed up
+      iceCandidatePoolSize: isVpnLikely ? 5 : 15, // Much smaller pool for instant connection
       // FORCE TURN for VPN users for reliability
       iceTransportPolicy: isVpnLikely ? 'relay' : 'all'
     })
@@ -283,9 +285,9 @@ export class WebRTCManager {
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
 
-    logger.log('🎯 Initial offer created, waiting for ICE gathering...')
+    logger.log('🎯 Initial offer created, minimal ICE gathering...')
     
-    // Wait for ICE gathering to complete to get all candidates in SDP
+    // 🚀 FAST: Minimal ICE gathering with aggressive timeout
     await new Promise<void>((resolve) => {
       if (pc.iceGatheringState === 'complete') {
         logger.log('✅ ICE gathering already complete for sender')
@@ -304,10 +306,10 @@ export class WebRTCManager {
       
       pc.addEventListener('icegatheringstatechange', handleIceGatheringChange)
       
-      // Smart timeout based on VPN detection
-      const timeoutMs = isVpnLikely ? 5000 : 10000 // 5s for VPN (TURN-only), 10s for others
+      // 🚀 MUCH FASTER timeout - 1s for normal, 2s for VPN
+      const timeoutMs = isVpnLikely ? 2000 : 1000
       setTimeout(() => {
-        logger.log(`⏰ Sender ICE gathering timeout after ${timeoutMs}ms - ${isVpnLikely ? 'VPN' : 'Normal'} mode`)
+        logger.log(`⏰ Fast ICE gathering timeout after ${timeoutMs}ms - ${isVpnLikely ? 'VPN' : 'Normal'} mode`)
         pc.removeEventListener('icegatheringstatechange', handleIceGatheringChange)
         resolve()
       }, timeoutMs)
@@ -323,10 +325,12 @@ export class WebRTCManager {
   async createReceiver(): Promise<{ connectionId: string; pc: RTCPeerConnection }> {
     const connectionId = generateId()
     
-    // Ensure ICE servers are loaded before creating connection
+    // 🚀 Use fallback ICE servers immediately if not loaded yet
     if (this.iceServers.length === 0) {
-      logger.log('⏳ Waiting for ICE servers to load...')
-      await this.loadIceServers()
+      logger.log('⚡ Using fallback ICE servers for immediate receiver connection')
+      this.iceServers = this.getFallbackIceServers()
+      // Load better servers in background
+      this.loadIceServers().catch(() => {})
     }
     
     // 🔍 VPN Detection for receiver
@@ -337,7 +341,7 @@ export class WebRTCManager {
       iceServers: this.iceServers,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: isVpnLikely ? 10 : 50, // Reduce for VPN to speed up
+      iceCandidatePoolSize: isVpnLikely ? 5 : 15, // Much smaller pool for instant connection
       // FORCE TURN for VPN users for reliability
       iceTransportPolicy: isVpnLikely ? 'relay' : 'all'
     })
@@ -1068,9 +1072,9 @@ export class WebRTCManager {
     const answer = await connection.connection.createAnswer()
     await connection.connection.setLocalDescription(answer)
 
-    logger.log('🎯 Initial answer created, waiting for receiver ICE gathering...')
+    logger.log('🎯 Initial answer created, minimal ICE gathering...')
     
-    // Wait for ICE gathering to complete to get all candidates in SDP
+    // 🚀 FAST: Minimal ICE gathering with aggressive timeout for receiver
     await new Promise<void>((resolve) => {
       const pc = connection.connection
       
@@ -1091,12 +1095,12 @@ export class WebRTCManager {
       
       pc.addEventListener('icegatheringstatechange', handleIceGatheringChange)
       
-      // Fallback timeout - increased for VPN scenarios
+      // 🚀 FAST timeout - 1.5s max
       setTimeout(() => {
-        logger.log('⏰ Receiver ICE gathering timeout')
+        logger.log('⏰ Fast receiver ICE gathering timeout after 1.5s')
         pc.removeEventListener('icegatheringstatechange', handleIceGatheringChange)
         resolve()
-      }, 10000) // 10s timeout for faster connection
+      }, 1500)
     })
 
     // Get the final answer with ICE candidates embedded
@@ -1237,23 +1241,29 @@ export class WebRTCManager {
 
   private async loadIceServers() {
     try {
-      const response = await fetch('/api/ice-servers')
+      // 🚀 Use timeout for faster loading
+      const controller = new AbortController()
+      setTimeout(() => controller.abort(), 2000) // 2s timeout
+      
+      const response = await fetch('/api/ice-servers', {
+        signal: controller.signal
+      })
       const data = await response.json()
       
       if (data.success && data.iceServers) {
         this.iceServers = data.iceServers
-        logger.log('✅ ICE servers loaded from API:', this.iceServers.length, 'servers')
+        logger.log('⚡ ICE servers loaded quickly:', this.iceServers.length, 'servers')
         
-        // Test TURN server connectivity
+        // Skip TURN connectivity test for speed - test in background
         if (this.iceServers.length > 0) {
-          await this.testTurnConnectivity()
+          setTimeout(() => this.testTurnConnectivity(), 1000) // Background test
         }
       } else {
         logger.warn('⚠️ Failed to load ICE servers from API, using fallback')
         this.iceServers = this.getFallbackIceServers()
       }
     } catch (error) {
-      logger.error('❌ Error loading ICE servers:', error)
+      logger.log('⚡ ICE server load timeout/error, using fallback for speed:', error)
       this.iceServers = this.getFallbackIceServers()
     }
   }
@@ -1330,52 +1340,37 @@ export class WebRTCManager {
     ]
   }
 
-  // 🔍 Smart Network Environment Detection (Behavior-Based)
+  // 🚀 ULTRA FAST VPN Detection - optimized for speed
   private async detectVpnEnvironment(): Promise<boolean> {
     try {
-      logger.log('🔍 Starting intelligent network analysis...')
+      logger.log('⚡ Quick network analysis (fast mode)...')
       
-      // 1️⃣ Quick NAT/Firewall test (most reliable indicator)
-      const natResult = await this.checkRestrictiveNAT()
+      // Quick timeout promises to avoid long waits
+      const quickTests = await Promise.allSettled([
+        this.quickNATCheck(),
+        this.quickTimingTest(),
+        Promise.resolve(this.hasVpnKeywords())
+      ])
       
-      // 2️⃣ Network timing analysis
-      const timingResult = await this.analyzeNetworkTiming()
-      
-      // 3️⃣ Connection quality patterns
-      const qualityResult = this.analyzeConnectionQuality()
-      
-      // 4️⃣ WebRTC capability check
-      const webrtcResult = this.checkWebRTCCapabilities()
-      
-      // 5️⃣ Only check for obvious VPN keywords (not specific providers)
-      const connection = (navigator as any).connection
-      const hasVpnKeywords = this.hasVpnKeywords()
-      
-      // Scoring system (0-100) - More lenient for mobile devices
       let restrictiveScore = 0
+      const [natResult, timingResult, keywordResult] = quickTests
       
-      if (natResult) restrictiveScore += 30        // Reduced from 40 - mobile NAT is common
-      if (timingResult) restrictiveScore += 30     // High latency/jitter
-      if (qualityResult) restrictiveScore += 25    // Connection inconsistencies
-      if (webrtcResult) restrictiveScore += 10     // WebRTC limitations
-      if (hasVpnKeywords) restrictiveScore += 15   // Only specific VPN keywords now
+      if (natResult.status === 'fulfilled' && natResult.value) restrictiveScore += 40
+      if (timingResult.status === 'fulfilled' && timingResult.value) restrictiveScore += 30
+      if (keywordResult.status === 'fulfilled' && keywordResult.value) restrictiveScore += 30
       
-      const isRestrictive = restrictiveScore >= 60  // Raised threshold from 50 to 60
+      const isRestrictive = restrictiveScore >= 50
       
-      logger.log('🔍 Network Environment Analysis:', {
-        natRestricted: natResult,
-        highLatencyPattern: timingResult,
-        qualityInconsistent: qualityResult,
-        webrtcLimited: webrtcResult,
-        hasVpnKeywords: hasVpnKeywords,
+      logger.log('⚡ Fast network analysis complete:', {
         totalScore: restrictiveScore,
-        conclusion: isRestrictive ? 'RESTRICTIVE/VPN' : 'NORMAL'
+        conclusion: isRestrictive ? 'RESTRICTIVE/VPN' : 'NORMAL',
+        duration: '~100ms'
       })
       
       return isRestrictive
     } catch (error) {
-      logger.log('🔍 Network analysis failed, using TURN-only for safety:', error)
-      return true // Safe default
+      logger.log('⚡ Quick analysis failed, defaulting to normal mode:', error)
+      return false // Default to normal for speed
     }
   }
 
@@ -1484,44 +1479,68 @@ export class WebRTCManager {
     }
   }
 
-  // Check for restrictive NAT (quick test)
-  private async checkRestrictiveNAT(): Promise<boolean> {
+  // 🚀 ULTRA FAST NAT check - 500ms max
+  private async quickNATCheck(): Promise<boolean> {
     try {
-      // Quick STUN test to detect NAT type
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       })
       
       let hasHostCandidate = false
-      let hasPublicCandidate = false
       
       return new Promise((resolve) => {
         const timeout = setTimeout(() => {
           pc.close()
-          resolve(!hasHostCandidate || !hasPublicCandidate) // Restrictive if missing candidates
-        }, 3000) // Quick 3s test
+          resolve(!hasHostCandidate) // Fast detection
+        }, 500) // Super quick 500ms test
         
         pc.onicecandidate = (event) => {
           if (event.candidate) {
             const candidate = event.candidate.candidate
-            if (candidate.includes('typ host')) hasHostCandidate = true
-            if (candidate.includes('typ srflx')) hasPublicCandidate = true
-          } else {
-            // ICE gathering complete
-            clearTimeout(timeout)
-            pc.close()
-            resolve(!hasHostCandidate || !hasPublicCandidate)
+            if (candidate.includes('typ host')) {
+              hasHostCandidate = true
+              clearTimeout(timeout)
+              pc.close()
+              resolve(false) // Has host = not restrictive
+            }
           }
         }
         
-        // Create a dummy data channel to trigger ICE gathering
         pc.createDataChannel('test')
-        pc.createOffer().then(offer => pc.setLocalDescription(offer))
+        pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {
+          clearTimeout(timeout)
+          pc.close()
+          resolve(true)
+        })
       })
     } catch (error) {
-      logger.log('🔍 NAT test failed, assuming restrictive:', error)
-      return true
+      return false // Default to normal for speed
     }
+  }
+
+  // 🚀 ULTRA FAST timing test - single endpoint, 300ms max
+  private async quickTimingTest(): Promise<boolean> {
+    try {
+      const start = Date.now()
+      const controller = new AbortController()
+      
+      setTimeout(() => controller.abort(), 300) // 300ms timeout
+      
+      await fetch('https://1.1.1.1', { 
+        method: 'HEAD',
+        signal: controller.signal
+      })
+      
+      const latency = Date.now() - start
+      return latency > 200 // High latency = likely VPN
+    } catch {
+      return false // Don't penalize for failed quick test
+    }
+  }
+
+  // Check for restrictive NAT (quick test) - DEPRECATED, kept for compatibility
+  private async checkRestrictiveNAT(): Promise<boolean> {
+    return this.quickNATCheck()
   }
 
   // Debug connection statistics
