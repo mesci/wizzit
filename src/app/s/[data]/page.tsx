@@ -91,6 +91,23 @@ export default function ReceivePage() {
   // 🚀 PERFORMANCE: Use throttled progress for smooth UI
   const throttledProgress = useThrottledProgress(transfer?.progress || 0)
 
+  // Warn on tab close if there is an active transfer or connecting
+  useEffect(() => {
+    const active = !!transfer && (transfer.status === 'transferring' || transfer.status === 'connecting')
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (active) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    if (active) {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    }
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [transfer])
+
   useEffect(() => {
     const fetchTransferData = async () => {
       try {

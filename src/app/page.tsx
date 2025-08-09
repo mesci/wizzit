@@ -104,6 +104,41 @@ export default function HomePage() {
     }
   }, [])
 
+  // Warn on tab close if there are active transfers
+  useEffect(() => {
+    const hasActiveTransfers = transfers.some(
+      (t) => t.status === 'transferring' || t.status === 'connecting' || t.status === 'pending-approval'
+    )
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Only warn if there are active transfers
+      if (hasActiveTransfers) {
+        e.preventDefault()
+        e.returnValue = '' // Required for Chrome
+      }
+    }
+
+    if (hasActiveTransfers) {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    }
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [transfers])
+
+  // Confirm before closing share modal if transfers are active
+  const handleRequestCloseShare = useCallback(() => {
+    const hasActiveTransfers = transfers.some(
+      (t) => t.status === 'transferring' || t.status === 'connecting' || t.status === 'pending-approval'
+    )
+    if (hasActiveTransfers) {
+      const ok = window.confirm('Closing will stop the ongoing transfer. Do you want to proceed?')
+      if (!ok) return
+    }
+    // Call after declaration via setTimeout to avoid order issues
+    setTimeout(() => handleCloseShare(), 0)
+  }, [transfers])
+
   const handleFileSelect = useCallback(async (file: File) => {
     setSelectedFile(file)
     setIsLoading(true)
@@ -980,7 +1015,7 @@ export default function HomePage() {
             fileSize={selectedFile?.size}
             transfers={transfers}
             vpnDetected={vpnWarning}
-            onClose={handleCloseShare}
+            onClose={handleRequestCloseShare}
           />
         )}
       </AnimatePresence>
