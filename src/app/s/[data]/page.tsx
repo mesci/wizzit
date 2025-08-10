@@ -121,8 +121,27 @@ export default function ReceivePage() {
         logger.log('🌐 Current URL:', window.location.href)
         logger.log('📱 User agent:', navigator.userAgent)
         
-        // Fetch transfer data from server
-        const response = await fetch(`/api/share?id=${shortId}`)
+        // Fetch transfer data from server with quick retry (handles cold starts / routing)
+        const maxAttempts = 12
+        const baseDelay = 200
+        let response: Response | null = null
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            response = await fetch(`/api/share?id=${shortId}`, { cache: 'no-store' })
+            if (response.ok) break
+            // Only retry on 404/500-range quickly
+            if (response.status === 404 || (response.status >= 500 && response.status < 600)) {
+              const delay = Math.min(baseDelay * Math.pow(1.4, attempt - 1), 1500)
+              await new Promise(res => setTimeout(res, delay))
+              continue
+            }
+            break
+          } catch {
+            const delay = Math.min(baseDelay * Math.pow(1.4, attempt - 1), 1500)
+            await new Promise(res => setTimeout(res, delay))
+          }
+        }
+        if (!response) throw new Error('Network error')
         
         logger.log('📡 Response status:', response.status)
         logger.log('📡 Response headers:', Object.fromEntries(response.headers.entries()))

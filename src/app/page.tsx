@@ -207,14 +207,20 @@ export default function HomePage() {
         vpnWarningState: vpnWarning
       })
       
-      // Store transfer data on server and get short ID
-      const response = await fetch('/api/share', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(transferData)
-      })
+      // Store transfer data on server and get short ID (retry for cold start)
+      const postBody = JSON.stringify(transferData)
+      const maxAttempts = 4
+      let response: Response | null = null
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        response = await fetch('/api/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: postBody
+        })
+        if (response.ok) break
+        await new Promise(res => setTimeout(res, 150 * attempt))
+      }
+      if (!response) throw new Error('Failed to create share link')
       
       logger.log(`⏱️ API call took: ${Date.now() - apiStartTime}ms`)
       
