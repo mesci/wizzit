@@ -2,10 +2,11 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, File as FileIcon } from 'lucide-react'
 import { FileUpload } from '@/components/FileUpload'
 import { ShareModal } from '@/components/ShareModal'
 import { Header } from '@/components/Header'
+// (removed duplicate react import)
 
 import { FileTransfer } from '@/types'
 import { getWebRTCManager } from '@/lib/webrtc'
@@ -54,6 +55,7 @@ export default function HomePage() {
   const [connections, setConnections] = useState<any[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [vpnWarning, setVpnWarning] = useState<boolean>(false)
+  const [transfersTotal, setTransfersTotal] = useState<number | null>(null)
   const [pin, setPin] = useState<string>('')
   const [pinEnabled, setPinEnabled] = useState<boolean>(false)
   const [linkOpened, setLinkOpened] = useState<boolean>(false)
@@ -104,6 +106,21 @@ export default function HomePage() {
     return () => {
       webrtcManager.cleanup()
     }
+  }, [])
+
+  // Public transfers counter – fetch every 60s
+  useEffect(() => {
+    let timer: any
+    const fetchStats = async () => {
+      try {
+        const res = await fetch('/api/stats', { cache: 'no-store' })
+        const data = await res.json()
+        if (typeof data?.total === 'number') setTransfersTotal(data.total)
+      } catch {}
+      timer = setTimeout(fetchStats, 60000)
+    }
+    fetchStats()
+    return () => timer && clearTimeout(timer)
   }, [])
 
   // Warn on tab close if there are active transfers
@@ -973,7 +990,7 @@ export default function HomePage() {
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
               
               {/* Left - Turkiye, email, legal with modern separators */}
-              <div className="flex items-center gap-3 text-gray-500">
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-3 text-gray-500 w-full sm:w-auto">
                 <div className="flex items-center gap-1.5">
                   <img src="/flag-of-turkey.svg" alt="Turkish Flag" className="w-4 h-3" />
                   <span>Built in Turkiye</span>
@@ -984,8 +1001,15 @@ export default function HomePage() {
                 <span className="text-gray-500">
                   yusuf(@)mesci.dev
                 </span>
-                
-
+                <span className="hidden sm:inline text-gray-300">|</span>
+                {/* Public Transfers counter */}
+                {typeof transfersTotal === 'number' && (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-[#F4C015]/50 bg-[#F4C015]/10 text-[#A87800] sm:ml-2 mt-1 sm:mt-0">
+                    <FileIcon className="w-3.5 h-3.5" />
+                    <span className="font-medium">Total Transfers:</span>
+                    <span className="tabular-nums">{new Intl.NumberFormat('en-US').format(transfersTotal)}</span>
+                  </span>
+                )}
               </div>
               
               {/* Right - Carbon footprint image */}

@@ -630,6 +630,14 @@ export class WebRTCManager {
                 transfer.progress = 100
                 this.onTransferUpdate?.(transfer)
               }
+        // Fire-and-forget: increment total completed transfers (idempotent)
+        try {
+          fetch('/api/stats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transferId: Array.from(this.transfers.keys()).find(id => this.transfers.get(id)?.peer === pc) })
+          })
+        } catch {}
               
               logger.log('💾 Starting automatic download...')
               this.downloadFile(file)

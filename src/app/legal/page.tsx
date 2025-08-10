@@ -150,6 +150,7 @@ export default function LegalPage() {
               <li>Connection timestamps</li>
               <li>File sizes (not content)</li>
               <li>Transfer status (success/failure)</li>
+              <li>Total transfers counter (aggregate only, no personal data)</li>
             </ul>
 
             <h3 className="text-xl font-semibold text-gray-900 mb-4 mt-8">Data We Do NOT Collect</h3>
@@ -171,6 +172,7 @@ export default function LegalPage() {
               <li>No file storage on our servers</li>
               <li>Secure peer-to-peer connections</li>
               <li>No cookies or tracking technologies</li>
+              <li>No personal identifiers linked to the public transfer counter</li>
             </ul>
 
             <h3 className="text-xl font-semibold text-gray-900 mb-4 mt-8">Contact</h3>
