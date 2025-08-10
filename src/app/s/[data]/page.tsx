@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams } from 'next/navigation'
-import { Download, CheckCircle, XCircle, ArrowLeft, AlertCircle, Clock, Zap } from 'lucide-react'
+import { Download, CheckCircle, XCircle, ArrowLeft, AlertCircle, Clock, Zap, RefreshCw } from 'lucide-react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { getWebRTCManager } from '@/lib/webrtc'
@@ -144,14 +144,8 @@ export default function ReceivePage() {
             logger.log('❌ Server error message:', errorMessage)
             logger.log('🕐 Request timestamp:', new Date().toISOString())
             
-            // Check if this might be a server restart issue
-            const isServerRestartIssue = errorMessage.includes('Transfer not found') || errorMessage.includes('not found')
-            
-            if (isServerRestartIssue) {
-              throw new Error('This link has expired. Links automatically expire after 15 minutes for security. Please ask the sender to create a fresh link.')
-            } else {
-              throw new Error('This link doesn\'t exist. Please double-check the URL or ask for a new link.')
-            }
+            // Softer wording: may have expired OR be temporarily unavailable
+            throw new Error('This link is currently unavailable. It may have expired (links are valid for 15 minutes) or be temporarily unavailable.')
           }
           
           throw new Error(errorMessage)
@@ -547,14 +541,26 @@ export default function ReceivePage() {
             <XCircle className="w-8 h-8 text-gray-600" />
           </div>
           <h1 className="text-xl font-medium mb-2 text-gray-900">Oops! Link unavailable</h1>
-          <p className="text-gray-600 mb-6 text-sm leading-relaxed">{error}</p>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 bg-gray-900 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-gray-800 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Create new transfer</span>
-          </Link>
+          <p className="text-gray-600 mb-5 text-sm leading-relaxed">
+            {error || 'This link may have expired or is temporarily unavailable.'}
+            <span className="block mt-1">Try refreshing the page and try again. If it still fails, ask the sender to create a new transfer.</span>
+          </p>
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            <button
+              onClick={() => window.location.reload()}
+              className="inline-flex items-center gap-2 border border-gray-300 text-gray-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Refresh</span>
+            </button>
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 bg-gray-900 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-gray-800 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Create new transfer</span>
+            </Link>
+          </div>
         </motion.div>
       </div>
     )
