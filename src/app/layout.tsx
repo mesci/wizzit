@@ -31,7 +31,9 @@ export const metadata: Metadata = {
       { url: '/icon.svg', type: 'image/svg+xml' },
     ],
     shortcut: '/favicon.ico',
-    apple: '/favicon.ico',
+    apple: [
+      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
+    ],
   },
   manifest: '/manifest.json',
   openGraph: {
@@ -70,6 +72,7 @@ export const metadata: Metadata = {
       'max-snippet': -1,
     },
   },
+  themeColor: '#ffffff',
 }
 
 export const viewport: Viewport = {
