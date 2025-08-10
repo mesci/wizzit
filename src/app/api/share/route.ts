@@ -9,6 +9,8 @@ const transferStore: Map<string, {
   fileSize: number
   senderHasVpn?: boolean
   createdAt: number
+  pinHash?: string
+  firstAccessedAt?: number
 }> = globalAny.__transferStore || new Map()
 
 if (!globalAny.__transferStore) {
@@ -62,7 +64,7 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Store transfer data
+    // Store transfer data (pinHash optional)
     transferStore.set(shortId, {
       ...transferData,
       createdAt: Date.now()
@@ -102,10 +104,38 @@ export async function GET(request: NextRequest) {
         error: 'This share link has expired. Links are valid for 15 minutes.' 
       }, { status: 404 })
     }
-    
+    // Mark first access time (allows sender UI to detect that receiver opened the link)
+    if (!transferData.firstAccessedAt) {
+      transferData.firstAccessedAt = Date.now()
+      transferStore.set(shortId, transferData)
+    }
     return NextResponse.json(transferData)
     
   } catch {
     return NextResponse.json({ error: 'Failed to retrieve transfer data' }, { status: 500 })
   }
 } 
+
+// Optional: update transfer metadata (e.g., set or clear pinHash) by short id
+export async function PUT(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const { id, pinHash } = body || {}
+    if (!id) {
+      return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+    }
+    const existing = transferStore.get(id)
+    if (!existing) {
+      return NextResponse.json({ error: 'Transfer not found' }, { status: 404 })
+    }
+    if (typeof pinHash === 'string') {
+      existing.pinHash = pinHash
+    } else if (pinHash === null) {
+      delete existing.pinHash
+    }
+    transferStore.set(id, existing)
+    return NextResponse.json({ success: true })
+  } catch {
+    return NextResponse.json({ error: 'Failed to update transfer' }, { status: 500 })
+  }
+}

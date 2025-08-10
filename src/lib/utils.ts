@@ -109,3 +109,16 @@ export function debounce<T extends (...args: any[]) => void>(
     timeout = setTimeout(() => func(...args), wait)
   }
 } 
+
+// Compute SHA-256 hash of a string and return hex
+export async function sha256Hex(input: string): Promise<string> {
+  if (typeof window === 'undefined' || !('crypto' in window)) {
+    // Basic fallback for non-browser env (not expected in client usage)
+    throw new Error('Crypto not available')
+  }
+  const encoder = new TextEncoder()
+  const data = encoder.encode(input)
+  const digest = await window.crypto.subtle.digest('SHA-256', data)
+  const bytes = new Uint8Array(digest)
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+}

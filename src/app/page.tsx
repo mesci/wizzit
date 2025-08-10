@@ -5,12 +5,11 @@ import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion'
 import { ArrowUpRight } from 'lucide-react'
 import { FileUpload } from '@/components/FileUpload'
 import { ShareModal } from '@/components/ShareModal'
-import { TransferProgress } from '@/components/TransferProgress'
 import { Header } from '@/components/Header'
 
 import { FileTransfer } from '@/types'
 import { getWebRTCManager } from '@/lib/webrtc'
-import { getRandomWittyMessage } from '@/lib/utils'
+import { getRandomWittyMessage, sha256Hex } from '@/lib/utils'
 import { logger } from '@/lib/logger'
 
 
@@ -55,6 +54,9 @@ export default function HomePage() {
   const [connections, setConnections] = useState<any[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [vpnWarning, setVpnWarning] = useState<boolean>(false)
+  const [pin, setPin] = useState<string>('')
+  const [pinEnabled, setPinEnabled] = useState<boolean>(false)
+  const [linkOpened, setLinkOpened] = useState<boolean>(false)
 
   const { scrollY } = useScroll()
   const heroY = useTransform(scrollY, [0, 300], [0, -30])
@@ -146,6 +148,10 @@ export default function HomePage() {
     // Clear any previous transfers and share data
     setTransfers([])
     setShareData(null)
+    // Reset PIN/link-open state for new transfer
+    setPin('')
+    setPinEnabled(false)
+    setLinkOpened(false)
     
     try {
       logger.log('⏱️ Starting file upload process...')
@@ -161,12 +167,19 @@ export default function HomePage() {
       logger.log(`⏱️ WebRTC createSender took: ${Date.now() - startTime}ms`)
       const apiStartTime = Date.now()
       
-      const transferData = {
+      const transferData: any = {
         transferId,
         offer: JSON.stringify(offer),
         fileName: file.name,
         fileSize: file.size,
         senderHasVpn: vpnWarning // Include VPN info for receiver
+      }
+
+      // Optional PIN
+      if (pinEnabled && pin && pin.length > 0) {
+        try {
+          transferData.pinHash = await sha256Hex(pin)
+        } catch {}
       }
       
       logger.log('📡 Sending transfer data to API:', {
@@ -198,6 +211,7 @@ export default function HomePage() {
       logger.log(`⏱️ Total process took: ${Date.now() - startTime}ms, shortId: ${shortId}`)
       
       setShareData({ transferId, url: shareUrl })
+      setLinkOpened(false)
       
       // Start listening for answers from receivers
       startSignalingPolling(transferId, webrtcManager)
@@ -253,6 +267,10 @@ export default function HomePage() {
         }
         
         const { signals } = await response.json()
+        // Detect receiver link open (first access) via heartbeat signal (peer-info or first candidate)
+        if (!linkOpened && Array.isArray(signals) && signals.length > 0) {
+          setLinkOpened(true)
+        }
         
         if (signals && signals.length > 0) {
           logger.log('📮 Processing signals:', signals)
@@ -333,6 +351,10 @@ export default function HomePage() {
     setTransfers([]) // Clear transfers state
     setConnections([]) // Clear connections state
     setUploadError(null)
+    // Reset PIN/link-open state when closing modal
+    setPin('')
+    setPinEnabled(false)
+    setLinkOpened(false)
     
     // Clean up WebRTC connections
     const webrtcManager = getWebRTCManager()
@@ -805,32 +827,7 @@ export default function HomePage() {
           </div>
         </motion.section>
 
-        {/* Active Transfers */}
-        <AnimatePresence>
-          {transfers.length > 0 && !shareData && (
-            <motion.section 
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="py-16 px-6 bg-gray-50 border-y border-gray-200"
-            >
-              <div className="max-w-2xl mx-auto">
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="text-center"
-                >
-                  <h2 className="text-lg font-medium text-gray-900 mb-8">Active transfers</h2>
-                  <div className="space-y-4">
-                    {transfers.map(transfer => (
-                      <TransferProgress key={transfer.id} transfer={transfer} />
-                    ))}
-                  </div>
-                </motion.div>
-              </div>
-            </motion.section>
-          )}
-        </AnimatePresence>
+        {/* Active Transfers removed per request */}
 
         {/* Why choose Wizzit */}
         <section className="py-24 px-6 bg-white">
@@ -1016,6 +1013,11 @@ export default function HomePage() {
             transfers={transfers}
             vpnDetected={vpnWarning}
             onClose={handleRequestCloseShare}
+            pinEnabled={pinEnabled}
+            onTogglePin={setPinEnabled}
+            pinValue={pin}
+            onPinChange={setPin}
+            linkOpened={linkOpened}
           />
         )}
       </AnimatePresence>

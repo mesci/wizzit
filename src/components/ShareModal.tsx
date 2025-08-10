@@ -3,8 +3,8 @@
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'react-qr-code'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Copy, Check, Link, AlertCircle, Clock, Zap } from 'lucide-react'
-import { copyToClipboard, formatFileSize } from '@/lib/utils'
+import { X, Copy, Check, Link, AlertCircle, Clock, Zap, Plus, Minus } from 'lucide-react'
+import { copyToClipboard, formatFileSize, sha256Hex } from '@/lib/utils'
 import { FileTransfer } from '@/types'
 
 interface ShareModalProps {
@@ -14,6 +14,12 @@ interface ShareModalProps {
   transfers?: FileTransfer[]
   vpnDetected?: boolean
   onClose: () => void
+  // Optional PIN controls (sender side)
+  pinEnabled?: boolean
+  onTogglePin?: (enabled: boolean) => void
+  pinValue?: string
+  onPinChange?: (val: string) => void
+  linkOpened?: boolean
 }
 
 // Helper function to calculate transfer speed with throttling
@@ -59,10 +65,22 @@ const useThrottledProgress = (progress: number, interval: number = 100) => {
   return displayProgress
 }
 
-export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetected = false, onClose }: ShareModalProps) {
+export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetected = false, onClose, pinEnabled, onTogglePin, pinValue, onPinChange, linkOpened = false }: ShareModalProps) {
   const [copied, setCopied] = useState(false)
   const [showQR, setShowQR] = useState(false)
   const [showNFC, setShowNFC] = useState(false)
+  const [pinSaving, setPinSaving] = useState(false)
+  const [pinMessage, setPinMessage] = useState<string>('')
+  const [pinOpen, setPinOpen] = useState<boolean>(false)
+
+  useEffect(() => {
+    // Auto-open only if a PIN is already set
+    if (pinEnabled) {
+      setPinOpen(true)
+    } else {
+      setPinOpen(false)
+    }
+  }, [pinEnabled])
   
   // 🚀 PERFORMANCE: Use throttled progress for smooth UI
   const activeTransfer = transfers.find(t => t.status === 'transferring' || t.status === 'connecting')
@@ -113,7 +131,7 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                     <path d="M7.5 12.5l3 3L16.5 9" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </div>
-                <div className="min-w-0 flex-1">
+                 <div className="min-w-0 flex-1">
                   <h2 className="text-lg font-medium text-gray-900">File ready</h2>
                   <div className="flex items-center gap-1 text-sm text-gray-600">
                     <span className="truncate max-w-32 sm:max-w-40">{fileName}</span>
@@ -121,7 +139,8 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                     <span className="flex-shrink-0">{formatFileSize(fileSize || 0)}</span>
                   </div>
                 </div>
-              </div>
+               </div>
+               {/* (moved) PIN controls will render in content section as a dedicated card */}
               <button
                 onClick={onClose}
                 className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors duration-200"
@@ -346,6 +365,134 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                   </motion.p>
                 )}
               </motion.div>
+
+              {/* PIN Controls (sender only) – collapsible */}
+              {onTogglePin && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.15 }}
+                  className="rounded-lg border border-gray-200 bg-white"
+                >
+                  <button
+                    className="w-full flex items-center justify-between gap-3 p-3 sm:p-4"
+                    onClick={() => setPinOpen((v) => !v)}
+                    aria-expanded={pinOpen}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center flex-shrink-0">
+                        <Plus className={`w-4 h-4 text-gray-600 transition-transform ${pinOpen ? 'rotate-45' : ''}`} />
+                      </div>
+                      <div className="min-w-0 text-left">
+                        <h4 className="text-sm font-medium text-gray-900 truncate">Add PIN Code (Optional)</h4>
+                        <p className="text-xs text-gray-500">Recipients must enter this PIN to download</p>
+                      </div>
+                    </div>
+                    {!!pinEnabled ? (
+                      <span className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700">PIN set</span>
+                    ) : (
+                      <span className="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">Not set</span>
+                    )}
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {pinOpen && (
+                      <motion.div
+                        key="pin-content"
+                        initial={{ height: 0 }}
+                        animate={{ height: 'auto' }}
+                        exit={{ height: 0 }}
+                        transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
+                        className="overflow-hidden"
+                      >
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.15, delay: 0.05 }}
+                          className="px-3 pb-3 sm:px-4 sm:pb-4"
+                        >
+                          <div className="mt-1 space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            name="pin-code"
+                            pattern="[0-9]*"
+                            placeholder="Enter PIN (e.g., 4–6 digits)"
+                            className="w-full sm:flex-1 px-3 py-2 rounded border border-gray-300 disabled:bg-gray-100 min-w-0"
+                            value={pinValue || ''}
+                            onChange={(e) => { setPinMessage(''); onPinChange?.(e.target.value) }}
+                            disabled={linkOpened}
+                            aria-label="PIN code"
+                          />
+                          <div className="flex w-full sm:w-auto items-center gap-2">
+                            <button
+                              disabled={linkOpened || pinSaving || !pinValue}
+                              onClick={async () => {
+                                try {
+                                  setPinSaving(true)
+                                  setPinMessage('')
+                                  const shortId = (() => { try { return new URL(url).pathname.split('/').pop() || '' } catch { return '' } })()
+                                  if (!shortId) throw new Error('Invalid share link')
+                                  const hash = await sha256Hex(pinValue || '')
+                                  const res = await fetch('/api/share', {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: shortId, pinHash: hash })
+                                  })
+                                  if (!res.ok) throw new Error('Failed to set PIN')
+                                  onTogglePin?.(true)
+                                  setPinMessage('PIN set successfully')
+                                } catch (e) {
+                                  setPinMessage('Could not set PIN')
+                                } finally {
+                                  setPinSaving(false)
+                                }
+                              }}
+                              className={`w-full sm:w-auto px-3 py-2 rounded text-sm font-medium ${linkOpened ? 'bg-gray-200 text-gray-500' : 'bg-gray-900 text-white hover:bg-gray-800'}`}
+                            >
+                              {pinSaving ? 'Saving...' : (pinEnabled ? 'Update' : 'Set PIN')}
+                            </button>
+                            {!!pinEnabled && (
+                              <button
+                                disabled={linkOpened || pinSaving}
+                                onClick={async () => {
+                                  try {
+                                    setPinSaving(true)
+                                    setPinMessage('')
+                                    const shortId = (() => { try { return new URL(url).pathname.split('/').pop() || '' } catch { return '' } })()
+                                    if (!shortId) throw new Error('Invalid share link')
+                                    const res = await fetch('/api/share', {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ id: shortId, pinHash: null })
+                                    })
+                                    if (!res.ok) throw new Error('Failed to clear PIN')
+                                    onTogglePin?.(false)
+                                    onPinChange?.('')
+                                    setPinMessage('PIN cleared')
+                                  } catch (e) {
+                                    setPinMessage('Could not clear PIN')
+                                  } finally {
+                                    setPinSaving(false)
+                                  }
+                                }}
+                                className={`w-full sm:w-auto px-3 py-2 rounded text-sm font-medium border ${linkOpened ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                          </div>
+                          {pinMessage && (
+                            <p className={`mt-2 text-xs ${pinMessage.includes('success') || pinMessage.includes('cleared') ? 'text-green-600' : 'text-red-600'}`}>{pinMessage}</p>
+                          )}
+                        </motion.div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
+              )}
 
               {/* QR Code Section */}
               <motion.div
