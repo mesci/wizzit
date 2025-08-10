@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// Force dynamic rendering and disable caching
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 // In-memory store for transfer data. Persist on globalThis to survive hot reloads in dev.
 const globalAny = global as any
 const transferStore: Map<string, {
@@ -109,7 +113,13 @@ export async function GET(request: NextRequest) {
       transferData.firstAccessedAt = Date.now()
       transferStore.set(shortId, transferData)
     }
-    return NextResponse.json(transferData)
+    return NextResponse.json(transferData, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    })
     
   } catch {
     return NextResponse.json({ error: 'Failed to retrieve transfer data' }, { status: 500 })
