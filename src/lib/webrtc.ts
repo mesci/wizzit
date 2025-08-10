@@ -1470,9 +1470,38 @@ export class WebRTCManager {
 
   // Analyze network timing patterns (high latency = likely VPN/Proxy)
   private async analyzeNetworkTiming(): Promise<boolean> {
-    // Disabled external timing probes to avoid CORS noise and UI delay in production
-    // Keep detection lightweight and non-invasive
-    return false
+    try {
+      const startTime = Date.now()
+      
+      // Test multiple endpoints for timing consistency
+      const promises = [
+        fetch('https://cloudflare.com/cdn-cgi/trace', { method: 'HEAD' }),
+        fetch('https://google.com', { method: 'HEAD' }),
+        fetch('https://1.1.1.1', { method: 'HEAD' })
+      ].map(async (promise) => {
+        try {
+          const testStart = Date.now()
+          await promise
+          return Date.now() - testStart
+        } catch {
+          return 999 // High latency for failed requests
+        }
+      })
+
+      const latencies = await Promise.all(promises)
+      const avgLatency = latencies.reduce((a, b) => a + b) / latencies.length
+      const maxLatency = Math.max(...latencies)
+      
+      // VPN indicators: high average latency or very inconsistent timing
+      const highLatency = avgLatency > 500
+      const inconsistentTiming = maxLatency - Math.min(...latencies) > 1000
+      
+      logger.log('🔍 Network timing analysis:', { latencies, avgLatency, highLatency, inconsistentTiming })
+      
+      return highLatency || inconsistentTiming
+    } catch {
+      return false // If timing test fails, don't penalize
+    }
   }
 
   // Analyze connection quality inconsistencies

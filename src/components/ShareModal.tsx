@@ -95,11 +95,6 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
   }
 
   const hasActiveTransfers = transfers.length > 0
-  
-  // Display-friendly URL (hide protocol and www.)
-  const displayUrl = typeof url === 'string' 
-    ? url.replace(/^https?:\/\/(www\.)?/i, '') 
-    : url
 
   return (
     <AnimatePresence>
@@ -308,9 +303,9 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
               >
                 <h3 className="text-sm font-medium text-gray-900 mb-3">Share link</h3>
                 <div className="flex gap-2">
-                  <div className="flex-1 p-2 sm:p-3 bg-gray-50 border border-gray-200 rounded-md" title={url}>
+                  <div className="flex-1 p-2 sm:p-3 bg-gray-50 border border-gray-200 rounded-md">
                     <p className="text-xs text-gray-600 font-mono break-all">
-                      {displayUrl}
+                      {url}
                     </p>
                   </div>
                   
