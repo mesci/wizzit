@@ -95,6 +95,11 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
   }
 
   const hasActiveTransfers = transfers.length > 0
+  
+  // Display-friendly URL (hide protocol and www.)
+  const displayUrl = typeof url === 'string' 
+    ? url.replace(/^https?:\/\/(www\.)?/i, '') 
+    : url
 
   return (
     <AnimatePresence>
@@ -111,7 +116,7 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
           transition={{ type: "spring", duration: 0.4 }}
-          className="relative bg-white rounded-lg shadow-xl w-full max-w-sm sm:max-w-md border border-gray-200 max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden"
+          className="relative bg-white rounded-lg shadow-xl w-full max-w-sm sm:max-w-md border border-gray-200 max-h-[85vh] sm:max-h-[90vh] my-6 sm:my-8 flex flex-col overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           
@@ -303,9 +308,9 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
               >
                 <h3 className="text-sm font-medium text-gray-900 mb-3">Share link</h3>
                 <div className="flex gap-2">
-                  <div className="flex-1 p-2 sm:p-3 bg-gray-50 border border-gray-200 rounded-md">
+                  <div className="flex-1 p-2 sm:p-3 bg-gray-50 border border-gray-200 rounded-md" title={url}>
                     <p className="text-xs text-gray-600 font-mono break-all">
-                      {url}
+                      {displayUrl}
                     </p>
                   </div>
                   
@@ -389,9 +394,9 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                       </div>
                     </div>
                     {!!pinEnabled ? (
-                      <span className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700">PIN set</span>
+                      <span className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700 whitespace-nowrap leading-none">PIN set</span>
                     ) : (
-                      <span className="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">Not set</span>
+                      <span className="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700 whitespace-nowrap leading-none">Not set</span>
                     )}
                   </button>
                   <AnimatePresence initial={false}>
@@ -538,7 +543,7 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
 
           {/* Footer */}
           <div className="p-4 sm:p-6 pt-0 flex-shrink-0">
-            <div className="bg-gray-50 rounded-lg p-3">
+            <div className="mt-3 sm:mt-0 bg-gray-50 rounded-lg p-3">
               <div className="flex items-center gap-2 text-xs text-gray-600">
                 <img 
                   src="/icon.svg" 
