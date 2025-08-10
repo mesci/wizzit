@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Transfer not found' }, { status: 404 })
     }
     
-    // Check if transfer has expired (15 minutes)
+    // Check if transfer has expired. (15 minutes)
     const now = Date.now()
     const EXPIRY_TIME = 15 * 60 * 1000 // 15 minutes in milliseconds
     const age = now - transferData.createdAt
