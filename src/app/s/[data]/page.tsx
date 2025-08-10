@@ -121,9 +121,9 @@ export default function ReceivePage() {
         logger.log('🌐 Current URL:', window.location.href)
         logger.log('📱 User agent:', navigator.userAgent)
         
-        // Fetch transfer data from server with quick retry (handles cold starts / routing)
-        const maxAttempts = 12
-        const baseDelay = 200
+        // Fetch transfer data with minimal retry (avoid visible delay)
+        const maxAttempts = 3
+        const baseDelay = 120
         let response: Response | null = null
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           try {

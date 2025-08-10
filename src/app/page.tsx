@@ -209,7 +209,7 @@ export default function HomePage() {
       
       // Store transfer data on server and get short ID (retry for cold start)
       const postBody = JSON.stringify(transferData)
-      const maxAttempts = 4
+      const maxAttempts = 2
       let response: Response | null = null
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         response = await fetch('/api/share', {
