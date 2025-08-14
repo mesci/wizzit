@@ -635,9 +635,14 @@ export default function ReceivePage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Enter PIN</label>
               <div className="flex items-center gap-2">
                 <input
-                  type="password"
+                  type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
+                  autoComplete="one-time-code"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  name="pin-code"
                   className="flex-1 px-3 py-2 rounded border border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-900"
                   value={pinInput}
                   onChange={(e) => { setPinInput(e.target.value); setPinError('') }}
