@@ -45,21 +45,21 @@ export async function GET(request: NextRequest) {
       { urls: 'stun:stun1.l.google.com:19302' },
       // Our STUN server
       { urls: `stun:${process.env.STUN_SERVER}:3478` },
-      // TURN server UDP (primary)
+      // TURN server UDP on 443 (often allowed on restrictive networks)
+      {
+        urls: `turn:${process.env.TURN_SERVER}:443?transport=udp`,
+        username: turnCredentials.username,
+        credential: turnCredentials.credential
+      },
+      // TURN server UDP (standard 3478)
       {
         urls: `turn:${process.env.TURN_SERVER}:3478?transport=udp`,
         username: turnCredentials.username,
         credential: turnCredentials.credential
       },
-      // TURN server TCP (VPN/WARP fallback)
+      // TURN server TCP (fallback – prefer after UDP options)
       {
         urls: `turn:${process.env.TURN_SERVER}:3478?transport=tcp`,
-        username: turnCredentials.username,
-        credential: turnCredentials.credential
-      },
-      // TURN server on port 443 (VPN-friendly)
-      {
-        urls: `turn:${process.env.TURN_SERVER}:443?transport=udp`,
         username: turnCredentials.username,
         credential: turnCredentials.credential
       },
@@ -75,20 +75,26 @@ export async function GET(request: NextRequest) {
 
     // Filter out any servers with missing configuration
     const validServers = iceServers.filter(server => {
-      if (server.urls.startsWith('turn:')) {
-        return process.env.TURN_SERVER && server.username && server.credential
-      }
-      if (server.urls.startsWith('stun:') && process.env.STUN_SERVER && server.urls.includes(process.env.STUN_SERVER)) {
-        return process.env.STUN_SERVER
-      }
-      return true // Google STUN servers are always valid
+      try {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls]
+        for (const u of urls) {
+          if (u.startsWith('turn:')) {
+            if (!process.env.TURN_SERVER || !('username' in server) || !('credential' in server)) return false
+          }
+          if (u.startsWith('stun:') && u.includes(':') && u.includes(process.env.STUN_SERVER || '')) {
+            if (!process.env.STUN_SERVER) return false
+          }
+        }
+        return true
+      } catch { return false }
     })
 
     return NextResponse.json({ 
       iceServers: validServers,
       success: true,
       credentialsExpiresAt: turnCredentials.expiresAt,
-      ttl: CREDENTIAL_TTL
+      ttl: CREDENTIAL_TTL,
+      isWarp
     })
   } catch (error) {
     logger.error('ICE servers error:', error)

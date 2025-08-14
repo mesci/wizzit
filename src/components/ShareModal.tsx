@@ -175,10 +175,10 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="text-sm font-medium text-amber-800 mb-1">
-                      VPN optimization active
+                      VPN or WARP optimization active
                     </h4>
                     <p className="text-xs text-amber-700 leading-relaxed">
-                      Your VPN connection has been detected. Link generation may be slightly slower, but transfers will work normally.
+                      A VPN or WARP connection has been detected. Link generation may be slightly slower, but transfers will work normally.
                     </p>
                   </div>
                 </div>

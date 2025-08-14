@@ -72,12 +72,12 @@ export const metadata: Metadata = {
       'max-snippet': -1,
     },
   },
-  themeColor: '#ffffff',
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  themeColor: '#ffffff',
 }
 
 export default function RootLayout({

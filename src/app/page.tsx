@@ -801,10 +801,10 @@ export default function HomePage() {
                               ease: [0.23, 1, 0.32, 1]
                             }}
                           >
-                            Network Optimization
+                            Network Optimization (VPN/WARP)
                           </motion.h4>
                         <p className="text-sm text-amber-700 leading-relaxed">
-                          VPN detected. This may slightly slow down the link generation process, but transfers will work normally.
+                          VPN or WARP detected. This may slightly slow down the link generation process, but transfers will work normally.
                         </p>
                       </div>
                         

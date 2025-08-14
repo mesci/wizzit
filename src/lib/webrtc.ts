@@ -27,9 +27,9 @@ export class WebRTCManager {
   private iceServers: RTCIceServer[] = []
 
   // Performance settings - tuned for higher throughput
-  private readonly chunkSize = 64 * 1024 // 64KB chunks – better throughput with low overhead
+  private readonly chunkSize = 64 * 1024 // 64KB chunks – proven stable throughput
   private readonly maxFileSize = 1024 * 1024 * 1024 * 1024 // 1TB limit - Practically unlimited!
-  private readonly maxBufferedAmount = 16 * 1024 * 1024 // 16MB buffer – better burst throughput
+  private readonly maxBufferedAmount = 16 * 1024 * 1024 // 16MB buffer – stable burst throughput
   private readonly bufferMonitorInterval = 1 // 1ms for faster throughput
 
   constructor() {
@@ -38,6 +38,12 @@ export class WebRTCManager {
       this.checkWebRTCSupport()
       this.initializeWorker()
       this.loadIceServers() // Load ICE servers from API
+      // Fire-and-forget WARP detection to surface UI hint ASAP
+      this.detectWarpViaTrace().then((warp) => {
+        if (warp && this.onVpnDetected) {
+          this.onVpnDetected('receiver')
+        }
+      }).catch(() => {})
     }
   }
 
@@ -371,9 +377,9 @@ export class WebRTCManager {
     
     // Background VPN detection
     this.detectVpnEnvironment().then((isVpnLikely) => {
-      if (isVpnLikely && this.onVpnDetected) {
+      if (this.onVpnDetected) {
         logger.log('🚨 Notifying receiver UI about VPN detection...')
-        this.onVpnDetected('receiver')
+        if (isVpnLikely) this.onVpnDetected('receiver')
       }
     }).catch(() => {})
 
@@ -730,7 +736,7 @@ export class WebRTCManager {
     const wait = (ms: number) => new Promise(res => setTimeout(res, ms))
 
     // Event-driven backpressure helpers
-    const lowThreshold = Math.max(this.chunkSize * 4, this.maxBufferedAmount - this.chunkSize * 16)
+    const lowThreshold = Math.floor(this.maxBufferedAmount / 2)
     try { dataChannel.bufferedAmountLowThreshold = lowThreshold } catch {}
 
     const waitForBufferedAmountBelow = (limit: number) => new Promise<void>((resolve) => {
@@ -786,20 +792,12 @@ export class WebRTCManager {
 
       const chunk = transfer.file.slice(offset, offset + this.chunkSize)
       try {
-        const arrayBuffer = await chunk.arrayBuffer()
+        const arrayBuffer = await this.processChunkInWorker(chunk, chunksSent)
         await sendWithBackpressure(arrayBuffer)
         chunksSent++
         offset += chunk.size
 
-        const localProgress = (chunksSent / totalChunks) * 100
-        if (localProgress > transfer.progress) {
-          transfer.progress = Math.min(localProgress, 95)
-          const now = Date.now()
-          if (now - lastProgressUpdate > 50) { // throttle a bit more
-            this.onTransferUpdate?.(transfer)
-            lastProgressUpdate = now
-          }
-        }
+        // Do not inflate sender-side progress; rely on receiver 'progress-sync'
       } catch (err) {
         logger.error('❌ Error processing/sending chunk', err)
         transfer.status = 'failed'
@@ -1323,6 +1321,10 @@ export class WebRTCManager {
       if (data.success && data.iceServers) {
         this.iceServers = data.iceServers
         logger.log('✅ ICE servers loaded from API:', this.iceServers.length, 'servers')
+        // If backend hints WARP, surface immediately
+        if (data.isWarp && this.onVpnDetected) {
+          this.onVpnDetected('receiver')
+        }
         
         // Test TURN server connectivity
         if (this.iceServers.length > 0) {
@@ -1365,7 +1367,7 @@ export class WebRTCManager {
         const timeout = setTimeout(() => {
           testPc.close()
           logger.log(`🔍 TURN connectivity test completed: ${turnCandidatesFound} relay candidates found`)
-                      if (turnCandidatesFound === 0) {
+          if (turnCandidatesFound === 0) {
               logger.log('❌ TURN server appears to be unreachable from this network!')
               logger.log('💡 This may be due to VPN/proxy blocking our TURN server')
             }
@@ -1377,7 +1379,7 @@ export class WebRTCManager {
             const candidate = event.candidate.candidate
             logger.log('🔍 TURN test candidate:', candidate)
             
-            if (candidate.includes('typ relay')) {
+            if (candidate.includes(' typ relay') || candidate.includes(' relay ')) {
               turnCandidatesFound++
               logger.log('✅ TURN relay candidate found!')
             }
@@ -1464,7 +1466,7 @@ export class WebRTCManager {
   private hasVpnKeywords(): boolean {
     const userAgent = navigator.userAgent.toLowerCase()
     // Only check for very specific VPN keywords, not generic ones like "secure" or "private"
-    const specificVpnKeywords = ['vpn', 'proxy', 'tunnel']
+    const specificVpnKeywords = ['vpn', 'proxy', 'tunnel', 'warp', 'cloudflare']
     return specificVpnKeywords.some(keyword => userAgent.includes(keyword))
   }
 
@@ -1474,33 +1476,72 @@ export class WebRTCManager {
       const startTime = Date.now()
       
       // Test multiple endpoints for timing consistency
-      const promises = [
-        fetch('https://cloudflare.com/cdn-cgi/trace', { method: 'HEAD' }),
-        fetch('https://google.com', { method: 'HEAD' }),
-        fetch('https://1.1.1.1', { method: 'HEAD' })
-      ].map(async (promise) => {
+      const endpoints = [
+        'https://cloudflare.com/cdn-cgi/trace',
+        'https://www.cloudflare.com',
+        'https://1.1.1.1',
+        'https://google.com'
+      ]
+      const promises = endpoints.map(async (url) => {
         try {
           const testStart = Date.now()
-          await promise
-          return Date.now() - testStart
+          const res = await fetch(url, { method: 'HEAD', cache: 'no-store' })
+          const latency = Date.now() - testStart
+          return { url, ok: res.ok, latency }
         } catch {
-          return 999 // High latency for failed requests
+          return { url, ok: false, latency: 999 }
         }
       })
 
-      const latencies = await Promise.all(promises)
-      const avgLatency = latencies.reduce((a, b) => a + b) / latencies.length
+      const results = await Promise.all(promises)
+      const latencies = results.map(r => r.latency)
+      const avgLatency = latencies.reduce((a, b) => a + b, 0) / latencies.length
       const maxLatency = Math.max(...latencies)
+      const minLatency = Math.min(...latencies)
       
       // VPN indicators: high average latency or very inconsistent timing
       const highLatency = avgLatency > 500
-      const inconsistentTiming = maxLatency - Math.min(...latencies) > 1000
+      const inconsistentTiming = maxLatency - minLatency > 1000
+      
+      // Cloudflare WARP heuristic: CF endpoints slower than others by a clear margin
+      const cfLatencies = results.filter(r => r.url.includes('cloudflare')).map(r => r.latency)
+      const nonCfLatencies = results.filter(r => !r.url.includes('cloudflare')).map(r => r.latency)
+      const cfAvg = cfLatencies.length ? cfLatencies.reduce((a,b)=>a+b,0)/cfLatencies.length : 0
+      const nonCfAvg = nonCfLatencies.length ? nonCfLatencies.reduce((a,b)=>a+b,0)/nonCfLatencies.length : 0
+      const warpLikely = cfAvg > 700 && nonCfAvg < 300
       
       logger.log('🔍 Network timing analysis:', { latencies, avgLatency, highLatency, inconsistentTiming })
       
-      return highLatency || inconsistentTiming
+      return highLatency || inconsistentTiming || warpLikely
     } catch {
       return false // If timing test fails, don't penalize
+    }
+  }
+
+  // Cloudflare WARP direct detection via trace endpoint
+  private async detectWarpViaTrace(): Promise<boolean> {
+    if (typeof window === 'undefined') return false
+    const endpoints = [
+      'https://www.cloudflare.com/cdn-cgi/trace',
+      'https://one.one.one.one/cdn-cgi/trace',
+      'https://1.1.1.1/cdn-cgi/trace'
+    ]
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 2000)
+    try {
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, { method: 'GET', cache: 'no-store', mode: 'cors', signal: controller.signal as any })
+          if (!res.ok) continue
+          const text = await res.text()
+          if (/warp=(on|plus)/i.test(text)) {
+            return true
+          }
+        } catch {}
+      }
+      return false
+    } finally {
+      clearTimeout(timeout)
     }
   }
 

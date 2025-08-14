@@ -76,6 +76,7 @@ export default function ReceivePage() {
   const [pinValid, setPinValid] = useState<boolean>(false)
   const [pinInput, setPinInput] = useState<string>('')
   const [pinError, setPinError] = useState<string>('')
+  const isStartingRef = useRef(false)
   
   // 📱 Mobile Warning System for Large Files  
   const [showMobileWarning, setShowMobileWarning] = useState(false)
@@ -94,6 +95,13 @@ export default function ReceivePage() {
   
   // 🚀 PERFORMANCE: Use throttled progress for smooth UI
   const throttledProgress = useThrottledProgress(transfer?.progress || 0)
+
+  // When transfer actually starts or completes, stop showing connecting state
+  useEffect(() => {
+    if (transfer && (transfer.status === 'transferring' || transfer.status === 'completed' || transfer.status === 'pending-approval')) {
+      setIsConnecting(false)
+    }
+  }, [transfer])
 
   // Warn on tab close if there is an active transfer or connecting
   useEffect(() => {
@@ -299,6 +307,8 @@ export default function ReceivePage() {
 
   const handleDownload = async () => {
     if (!fileInfo) return
+    if (isStartingRef.current) return
+    isStartingRef.current = true
     
     // 📱 Check for mobile device + large file (>100MB) - Show warning first
     const isLargeFile = fileInfo.fileSize > 100 * 1024 * 1024 // 100MB threshold
@@ -306,6 +316,7 @@ export default function ReceivePage() {
     if (isMobile && isLargeFile) {
       logger.log('📱 Mobile device detected with large file, showing warning...')
       setShowMobileWarning(true)
+      // allow user decision to proceed; keep guard set until they choose
       return
     }
     
@@ -314,7 +325,15 @@ export default function ReceivePage() {
       setPinError('PIN is required')
       return
     }
-    await proceedWithDownload()
+    setIsConnecting(true)
+    await proceedWithDownload().catch(() => {}).finally(() => {
+      // If we didn't transition into connecting/transfer, release guard
+      setTimeout(() => {
+        if (!isConnecting && !transfer) {
+          isStartingRef.current = false
+        }
+      }, 0)
+    })
   }
 
   // 📱 Handle mobile warning responses
@@ -323,10 +342,17 @@ export default function ReceivePage() {
     
     // Close modal immediately and start download process
     setShowMobileWarning(false)
+    if (!isStartingRef.current) isStartingRef.current = true
     setIsConnecting(true) // Show loading state immediately
     
     // Proceed with download (call original logic without mobile check)
-    await proceedWithDownload()
+    await proceedWithDownload().catch(() => {}).finally(() => {
+      setTimeout(() => {
+        if (!isConnecting && !transfer) {
+          isStartingRef.current = false
+        }
+      }, 0)
+    })
   }
 
   const handleMobileWarningCancel = () => {
@@ -485,7 +511,7 @@ export default function ReceivePage() {
       logger.error('Download failed:', err)
       setError('Failed to connect to sender. They might be offline or have closed their browser. Ask them to refresh their page and try again.')
     } finally {
-      setIsConnecting(false)
+      // Keep isConnecting true until transfer starts or an error occurs
       if (hintTimeout) {
         clearTimeout(hintTimeout)
         setHintTimeout(null)
@@ -619,7 +645,8 @@ export default function ReceivePage() {
                 />
                 <button
                   onClick={handleDownload}
-                  className="px-4 py-2 bg-gray-900 text-white rounded hover:bg-gray-800 text-sm font-medium"
+                  disabled={isConnecting}
+                  className={`px-4 py-2 rounded text-sm font-medium ${isConnecting ? 'bg-gray-300 text-gray-600 cursor-not-allowed' : 'bg-gray-900 text-white hover:bg-gray-800'}`}
                 >
                   Verify
                 </button>
@@ -634,11 +661,21 @@ export default function ReceivePage() {
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-                onClick={handleDownload}
-              className="w-full bg-gray-900 text-white py-3 rounded-lg hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+              onClick={handleDownload}
+              disabled={isConnecting}
+              className={`w-full py-3 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium ${isConnecting ? 'bg-gray-300 text-gray-600 cursor-not-allowed' : 'bg-gray-900 text-white hover:bg-gray-800'}`}
             >
-                    <Download className="w-4 h-4" />
-              <span>Download file</span>
+              {isConnecting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-gray-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Starting...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4" />
+                  <span>Download file</span>
+                </>
+              )}
             </motion.button>
           )}
 
@@ -667,14 +704,14 @@ export default function ReceivePage() {
                       </div>
                       <div className="flex-1">
                         <h4 className="text-xs font-medium text-amber-800 mb-1">
-                          VPN/Proxy Detected
+                          VPN/WARP Detected
                         </h4>
                         <p className="text-xs text-amber-700 leading-relaxed">
-                          {vpnWarning.type === 'sender' ? 
-                            'Sender has VPN enabled. If download fails, ask them to disable VPN and try again.' :
+                            {vpnWarning.type === 'sender' ? 
+                             'Sender has VPN or WARP enabled. If download fails, ask them to disable it and try again.' :
                             vpnWarning.type === 'receiver' ?
-                            'VPN detected. Download may take slightly longer, but will work normally.' :
-                            'Both sender and receiver have VPN. This may cause connection issues. Try disabling VPN if download fails.'
+                            'VPN or WARP detected. Download may take slightly longer, but will work normally.' :
+                            'Both sender and receiver have VPN/WARP. This may cause connection issues. Try disabling them if download fails.'
                           }
                         </p>
                       </div>
