@@ -72,6 +72,15 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
   const [pinSaving, setPinSaving] = useState(false)
   const [pinMessage, setPinMessage] = useState<string>('')
   const [pinOpen, setPinOpen] = useState<boolean>(false)
+  const displayUrl = (() => {
+    try {
+      const u = new URL(url)
+      const host = u.hostname.replace(/^www\./, '')
+      return `${host}${u.pathname}${u.search}${u.hash}`
+    } catch {
+      return url.replace(/^https?:\/\/(www\.)?/, '')
+    }
+  })()
 
   useEffect(() => {
     // Auto-open only if a PIN is already set
@@ -305,7 +314,7 @@ export function ShareModal({ url, fileName, fileSize, transfers = [], vpnDetecte
                 <div className="flex gap-2">
                   <div className="flex-1 p-2 sm:p-3 bg-gray-50 border border-gray-200 rounded-md">
                     <p className="text-xs text-gray-600 font-mono break-all">
-                      {url}
+                      {displayUrl}
                     </p>
                   </div>
                   
