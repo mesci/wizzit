@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { UpstashKV } from '@/lib/kv'
 
 // Force dynamic rendering and disable caching
 export const dynamic = 'force-dynamic'
@@ -20,6 +21,13 @@ const transferStore: Map<string, {
 if (!globalAny.__transferStore) {
   globalAny.__transferStore = transferStore
 }
+
+// KV with TTL (15 minutes) – keeps links consistent across instances
+const KV_TTL_SECONDS = 15 * 60
+const kv = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+  ? new UpstashKV(process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN)
+  : null
+const kvKey = (id: string) => `wizzit:share:${id}`
 
 // Generate short ID
 const generateShortId = (): string => {
@@ -69,10 +77,14 @@ export async function POST(request: NextRequest) {
     }
     
     // Store transfer data (pinHash optional)
-    transferStore.set(shortId, {
+    const payload = {
       ...transferData,
       createdAt: Date.now()
-    })
+    }
+    transferStore.set(shortId, payload)
+    if (kv) {
+      try { await kv.setWithTTL(kvKey(shortId), JSON.stringify(payload), KV_TTL_SECONDS) } catch {}
+    }
     
     return NextResponse.json({ shortId })
     
@@ -90,7 +102,35 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Missing ID parameter' }, { status: 400 })
     }
     
-    const transferData = transferStore.get(shortId)
+    let transferData = transferStore.get(shortId) as {
+      transferId: string
+      offer: string
+      fileName: string
+      fileSize: number
+      senderHasVpn?: boolean
+      createdAt: number
+      pinHash?: string
+      firstAccessedAt?: number
+    } | undefined
+    if (!transferData && kv) {
+      try {
+        const raw = await kv.get(kvKey(shortId))
+        if (raw) {
+          const parsed = JSON.parse(raw) as {
+            transferId: string
+            offer: string
+            fileName: string
+            fileSize: number
+            senderHasVpn?: boolean
+            createdAt: number
+            pinHash?: string
+            firstAccessedAt?: number
+          }
+          transferData = parsed
+          transferStore.set(shortId, parsed)
+        }
+      } catch {}
+    }
     
     if (!transferData) {
       return NextResponse.json({ error: 'Transfer not found' }, { status: 404 })
@@ -110,10 +150,11 @@ export async function GET(request: NextRequest) {
     }
     // Mark first access time (allows sender UI to detect that receiver opened the link)
     if (!transferData.firstAccessedAt) {
-      transferData.firstAccessedAt = Date.now()
-      transferStore.set(shortId, transferData)
+      const updated = { ...transferData!, firstAccessedAt: Date.now() }
+      transferStore.set(shortId, updated)
+      transferData = updated
     }
-    return NextResponse.json(transferData, {
+    return NextResponse.json(transferData as any, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         'Pragma': 'no-cache',
@@ -134,7 +175,13 @@ export async function PUT(request: NextRequest) {
     if (!id) {
       return NextResponse.json({ error: 'Missing id' }, { status: 400 })
     }
-    const existing = transferStore.get(id)
+    let existing = transferStore.get(id)
+    if (!existing && kv) {
+      try {
+        const raw = await kv.get(kvKey(id))
+        if (raw) existing = JSON.parse(raw)
+      } catch {}
+    }
     if (!existing) {
       return NextResponse.json({ error: 'Transfer not found' }, { status: 404 })
     }
@@ -144,6 +191,9 @@ export async function PUT(request: NextRequest) {
       delete existing.pinHash
     }
     transferStore.set(id, existing)
+    if (kv) {
+      try { await kv.setWithTTL(kvKey(id), JSON.stringify(existing), KV_TTL_SECONDS) } catch {}
+    }
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Failed to update transfer' }, { status: 500 })
